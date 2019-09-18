@@ -1,0 +1,96 @@
+import csv
+import numpy as np
+from tqdm import tqdm
+
+import torch
+from torch import nn
+from torch.utils import data
+from torch.optim.lr_scheduler import StepLR
+
+from utils import *
+from dataloader import *
+from model import Unet
+
+def custom_aug(x):
+    db =np.random.uniform(low=0,high=50)
+    p = np.random.uniform()
+    if p<0.4:
+        return add_whitenoise(x,db)
+    elif p<0.7:
+        return add_pinknoise(x,db)
+    else:
+        return add_brownnoise(x,db)
+    
+###Hyper parameters
+
+save_path = './models/Unet/'
+n_epoch = 90
+batch_size = 6000
+n_frame = 576
+window = int(n_frame*1.1)
+step = int(n_frame/3)
+learning_rate = 1e-2
+
+print("[*] load data ...")
+train_X,train_y,val_X,val_y = load_datas(n_frame,window,step)
+
+train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug = custom_aug)
+valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
+train_loader = data.DataLoader(dataset=train_dataset,
+                               batch_size=batch_size,
+                               num_workers=2,
+                               shuffle=True)
+valid_loader = data.DataLoader(dataset=valid_dataset,
+                               batch_size=batch_size,
+                               num_workers=2,
+                              shuffle=False)
+
+print("[!] load data end")
+
+model = Unet(nlayers = 6, nefilters = 12)
+model.cuda()
+criterion = nn.MSELoss()
+criterion.cuda()
+
+optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
+scheduler = StepLR(optimizer,step_size=30,gamma = 0.1)
+
+print("[*] training ...")
+
+log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
+log_writer = csv.writer(log)
+
+best_val_loss = 100
+for epoch in range(n_epoch):
+    avg_loss = 0.
+    optimizer.zero_grad()
+    model.train()
+    for idx,(_x,_y) in enumerate(tqdm(train_loader)):
+        x_train,y_train = _x.float().cuda(),_y.float().cuda()
+        pred = model(x_train)
+        loss = criterion(pred,y_train)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        avg_loss += loss.item() / len(train_loader)
+        
+    val_loss = 0.
+    model.eval()
+    with torch.no_grad():
+        for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
+            x_val,y_val = _x.float().cuda(),_y.float().cuda()
+            pred = model(x_val)
+            loss= criterion(pred,y_val)
+            val_loss += loss.item()/len(valid_loader)
+    scheduler.step()
+    if val_loss < best_val_loss:
+        torch.save(model.state_dict(), os.path.join(save_path,'best_val.pth'))
+        best_val_loss = val_loss
+    
+    log_writer.writerow([epoch,avg_loss,val_loss])
+    log.flush()
+    print("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f "%
+          (epoch,n_epoch,avg_loss,val_loss))
+
+log.close()
+print("[!] training end")
