@@ -9,23 +9,24 @@ from torch.optim.lr_scheduler import StepLR
 
 from utils import *
 from dataloader import *
-from model import Unet
+from model import Unet,Resv2Unet
 
 def custom_aug(x):
-    db =np.random.uniform(low=0,high=50)
+    db =np.random.uniform(low=-5,high=45)
     p = np.random.uniform()
-    if p<0.4:
+    if p<0.33:
         return add_whitenoise(x,db)
-    elif p<0.7:
+    elif p<0.66:
         return add_pinknoise(x,db)
     else:
         return add_brownnoise(x,db)
-    
+
+seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Unet/'
-n_epoch = 90
-batch_size = 6000
+save_path = './models/Resv2Unet/'
+n_epoch = 200
+batch_size = 4096
 n_frame = 576
 window = int(n_frame*1.1)
 step = int(n_frame/3)
@@ -47,13 +48,13 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 
 print("[!] load data end")
 
-model = Unet(nlayers = 6, nefilters = 12)
+model = Resv2Unet(nlayers = 6, nefilters = 12)
 model.cuda()
 criterion = nn.MSELoss()
 criterion.cuda()
 
 optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
-scheduler = StepLR(optimizer,step_size=30,gamma = 0.1)
+scheduler = StepLR(optimizer,step_size=80,gamma = 0.3)
 
 print("[*] training ...")
 
