@@ -144,9 +144,11 @@ class Unet(nn.Module):
             nn.Tanh()
         )
     def forward(self,x):
-        
+        ## x = [bs,n_frame,1]
         encoder = list()
         x = x.squeeze(-1).unsqueeze(1)
+        
+        # x = [bs,1,n_frame]
         
         input = x
         for i in range(self.num_layers):
