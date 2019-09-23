@@ -12,6 +12,7 @@ from utils import *
 from dataloader import *
 from model import Unet,Resv2Unet
 from apex import amp
+from apex.parallel import DistributedDataParallel as DDP
 
 def custom_aug(x):
     db =np.random.uniform(low=-5,high=45)
@@ -26,12 +27,13 @@ def custom_aug(x):
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Resv2Unet_Many/'
+save_path = './models/Unet/'
 os.makedirs(save_path,exist_ok=True)
 n_epoch = 200
-batch_size =8192
-n_frame = 576
-window = int(n_frame*1.1)
+batch_size = 77000
+n_frame = 384
+# (1.5 -1)*2.4 = 1 --> Can see all possible datas
+window = int(n_frame*1.4 )
 step = int(n_frame/3)
 learning_rate = 1e-2
 
@@ -46,17 +48,21 @@ train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug 
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=40,
+                               num_workers=18,
                                shuffle=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=40,
+                               num_workers=18,
                               shuffle=False)
 
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-model = Resv2Unet(nlayers = 6, nefilters = 15)
+torch.cuda.set_device(4)
+torch.distributed.init_process_group(backend='nccl',
+                                     init_method='env://')
+
+model = Unet(nlayers = 6, nefilters = 12)
 model.cuda()
 
 criterion = nn.MSELoss()
@@ -64,10 +70,11 @@ criterion.cuda()
 optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
 
 opt_level = 'O1'
-model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
+assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
+model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level,keep_batchnorm_fp32=True)
 scheduler = StepLR(optimizer,step_size=80,gamma = 0.3)
 
-model = nn.DataParallel(model)
+model = DDP(model,delay_allreduce=True)
 
 
 print("[*] training ...")

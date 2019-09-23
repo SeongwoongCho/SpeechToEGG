@@ -16,7 +16,7 @@ def seed_everything(seed=1234):
 seed_everything(42)
 
 def check_data(x,y,threshold):
-    if(np.max(x)-np.min(x)<0.05):
+    if(np.max(x) - np.min(x) < 0.1):
         return False
     if(np.max(y)-np.min(y)<threshold):
         return False
@@ -66,3 +66,7 @@ def add_brownnoise(x,db):
     lam = 1/(1+a)
     
     return lam*x+(1-lam)*noise
+
+def release_list(a):
+    a.clear()
+    del a
