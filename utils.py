@@ -67,6 +67,16 @@ def add_brownnoise(x,db):
     
     return lam*x+(1-lam)*noise
 
+def custom_aug(x):
+    db =np.random.uniform(low=-5,high=45)
+    p = np.random.uniform()
+    if p<0.33:
+        return add_whitenoise(x,db)
+    elif p<0.66:
+        return add_pinknoise(x,db)
+    else:
+        return add_brownnoise(x,db)
+    
 def release_list(a):
     a.clear()
     del a

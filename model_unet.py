@@ -11,10 +11,14 @@ class BottleneckV2(nn.Module):
         self.conv2 = nn.Conv1d(channels//4,channels//4, ks, stride=stride, padding=ks//2,bias=False)
         self.bn3 = nn.BatchNorm1d(channels//4)
         self.conv3 = nn.Conv1d(channels//4,channels, 1, stride=1, bias=False)
-        if downsample:self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
-        else:self.downsample = None
-        if upsample:self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
-        else:self.upsample = None
+        if downsample:
+            self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
+        else:
+            self.downsample = None
+        if upsample:
+            self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
+        else:
+            self.upsample = None
 
     def forward(self,x):
         residual = x
@@ -227,3 +231,4 @@ class Resv2Unet(nn.Module):
 
         x = x.squeeze(1).unsqueeze(-1)
         return x
+    

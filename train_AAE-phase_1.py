@@ -10,29 +10,19 @@ from torch.optim.lr_scheduler import StepLR
 
 from utils import *
 from dataloader import *
-from model import Unet,Resv2Unet
+from model_AAE import FCAE, SimpleDiscriminator
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
-
-def custom_aug(x):
-    db =np.random.uniform(low=-5,high=45)
-    p = np.random.uniform()
-    if p<0.33:
-        return add_whitenoise(x,db)
-    elif p<0.66:
-        return add_pinknoise(x,db)
-    else:
-        return add_brownnoise(x,db)
 
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Unet/'
+save_path = './models/AAI_EGGAE/'
 os.makedirs(save_path,exist_ok=True)
 n_epoch = 200
-batch_size = 77000
-n_frame = 384
-# (1.5 -1)*2.4 = 1 --> Can see all possible datas
+batch_size = 100000
+n_frame = 192
+# (1.4-1)*3 > 1 --> Can see all possible datas
 window = int(n_frame*1.4 )
 step = int(n_frame/3)
 learning_rate = 1e-2
@@ -58,11 +48,11 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-torch.cuda.set_device(4)
-torch.distributed.init_process_group(backend='nccl',
-                                     init_method='env://')
+# torch.cuda.set_device(4)
+# torch.distributed.init_process_group(backend='nccl',
+#                                      init_method='env://')
 
-model = Unet(nlayers = 6, nefilters = 12)
+model = FCAE()
 model.cuda()
 
 criterion = nn.MSELoss()
@@ -70,11 +60,11 @@ criterion.cuda()
 optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
 
 opt_level = 'O1'
-assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
-model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level,keep_batchnorm_fp32=True)
-scheduler = StepLR(optimizer,step_size=80,gamma = 0.3)
+# assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
+model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
+scheduler = StepLR(optimizer,step_size=80,gamma = 0.1)
 
-model = DDP(model,delay_allreduce=True)
+model = nn.DataParallel(model)
 
 
 print("[*] training ...")
@@ -87,14 +77,13 @@ for epoch in range(n_epoch):
     avg_loss = 0.
     optimizer.zero_grad()
     model.train()
-    for idx,(_x,_y) in enumerate(tqdm(train_loader)):
-        x_train,y_train = _x.float().cuda(),_y.float().cuda()
+    for idx,(_,_y) in enumerate(tqdm(train_loader)):
+        x_train,y_train = _y.float().cuda(),_y.float().cuda()
         pred = model(x_train)
 
         loss = criterion(pred,y_train)
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
-#         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         avg_loss += loss.item() / len(train_loader)
@@ -102,8 +91,8 @@ for epoch in range(n_epoch):
     val_loss = 0.
     model.eval()
     with torch.no_grad():
-        for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
-            x_val,y_val = _x.float().cuda(),_y.float().cuda()
+        for idx,(_,_y) in enumerate(tqdm(valid_loader)):
+            x_val,y_val = _y.float().cuda(),_y.float().cuda()
             pred = model(x_val)
             loss= criterion(pred,y_val)
             val_loss += loss.item()/len(valid_loader)

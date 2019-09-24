@@ -15,7 +15,7 @@ def process_cmu(t): ## args : drt, file,window,step
     X,y = [],[]
 
     x,sr = librosa.load(drt+file,sr=16000,mono=False)
-    itvs = librosa.effects.split(x[0],frame_length = 256, hop_length = 128,top_db = 10)
+    itvs = librosa.effects.split(x[0],frame_length = int(window*0.75), hop_length = int(window*0.5),top_db = 10)
 
     x[0] = butter_lowpass_filter(x[0],2500,16000)
     for st_idx,end_idx in itvs:
@@ -45,7 +45,7 @@ def process_saarbrucken(t):
         y = y[:len(x)]
     x = librosa.resample(x, sr, 16000)
     y = librosa.resample(y, sr, 16000)
-    itvs = librosa.effects.split(x,frame_length = 256, hop_length = 128,top_db = 10)
+    itvs = librosa.effects.split(x,frame_length = int(window*0.75), hop_length = int(window*0.5),top_db = 10)
     
     x = butter_lowpass_filter(x,2500,16000)
     for st_idx,end_idx in itvs:

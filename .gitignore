@@ -1,1 +1,3 @@
-datasets/*
+*.WAV
+*.wav
+*.zip
