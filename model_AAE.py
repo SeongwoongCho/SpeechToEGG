@@ -7,16 +7,16 @@ class FCEncoder(nn.Module):
         super(FCEncoder, self).__init__()
         self.module_list = nn.ModuleList()
         self.batches = nn.ModuleList()
-        self.drop_rate = 0.5
-        tmp = [192,144,121,100,81,64,49]
-        for i in range(6):
+#         self.drop_rate = 0.5
+        tmp = [192,175,125,100]
+        for i in range(3):
             self.module_list.append(nn.Linear(tmp[i],tmp[i+1]))
             self.batches.append(nn.BatchNorm1d(num_features=tmp[i+1]))
     def forward(self,x):
         x = x.squeeze(-1)
         for batch,lin in zip(self.batches,self.module_list):
             x = F.relu(batch(lin(x)))
-            x = F.dropout(x,self.drop_rate,self.training)
+#             x = F.dropout(x,self.drop_rate,self.training)
         x = x.unsqueeze(-1)
         return x
         
@@ -25,9 +25,9 @@ class FCDecoder(nn.Module):
         super(FCDecoder, self).__init__()
         self.module_list = nn.ModuleList()
         self.batches = nn.ModuleList()
-        self.drop_rate = 0.5
-        tmp = [49,64,81,100,121,144,192]
-        for i in range(6):
+#         self.drop_rate = 0.5
+        tmp = [100,125,175,192]
+        for i in range(3):
             self.module_list.append(nn.Linear(tmp[i],tmp[i+1]))
             self.batches.append(nn.BatchNorm1d(num_features=tmp[i+1]))
     def forward(self,x):
@@ -35,7 +35,7 @@ class FCDecoder(nn.Module):
         for i,(batch,lin) in enumerate(zip(self.batches,self.module_list)):
             if i!=len(self.module_list)-1:
                 x = F.relu(batch(lin(x)))
-                x = F.dropout(x,self.drop_rate,self.training)
+#                 x = F.dropout(x,self.drop_rate,self.training)
             else:
                 x = F.tanh(batch(lin(x)))
         x = x.unsqueeze(-1)
@@ -56,14 +56,21 @@ class FCAE(nn.Module):
 class SimpleDiscriminator(nn.Module):
     def __init__(self):
         super(SimpleDiscriminator,self).__init__()
-        self.drop_rate = 0.3
-        self.lin1 = nn.Linear(49,16)
-        self.lin2 = nn.Linear(16,1)
+#         self.drop_rate = 0.3
+        self.lin1 = nn.Linear(100,50)
+        self.lin2 = nn.Linear(50,25)
+        self.lin3 = nn.Linear(25,1)
         
+        self.batch1 = nn.BatchNorm1d(50)
+        self.batch2 = nn.BatchNorm1d(25)
+        self.batch3 = nn.BatchNorm1d(1)
     def forward(self,x):
         x = x.squeeze(-1)
-        x = F.relu(self.lin1(x))
-        x = F.dropout(x,self.drop_rate,self.training)
-        x = self.lin2(x)
+        x = F.relu(self.batch1(self.lin1(x)))
+        x = F.relu(self.batch2(self.lin2(x)))
+        x = F.sigmoid(self.batch3(self.lin3(x)))
+#         x = F.dropout(x,self.drop_rate,self.training)
+#         x = F.relu
+#         x = F.sigmoid(self.lin2(x))
         x = x.unsqueeze(-1)
         return x

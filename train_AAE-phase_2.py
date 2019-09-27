@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
+from torch.nn import functional as F
 
 from utils import *
 from dataloader import *
@@ -14,20 +15,22 @@ from model_AAE import *
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
 
+import multiprocessing as mp
+
 seed_everything(42)
 ###Hyper parameters
 
 save_path = './models/AAI/'
 os.makedirs(save_path,exist_ok=True)
 n_epoch = 200
-batch_size = 150000
+batch_size = 80000
 n_frame = 192
 # (1.4 -1)*3 = 1.2 --> Can see all possible datas
 window = int(n_frame*1.4 )
-step = int(n_frame/3)
+step = int(n_frame/2.5)
 
-gen_lr = 2e-2
-reg_lr = 1e-2
+gen_lr = 2e-3
+reg_lr = 2e-3
 EPS = 1e-12
 
 print("[*] load data ...")
@@ -41,11 +44,11 @@ train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug 
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=18,
+                               num_workers=mp.cpu_count()-4,
                                shuffle=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=18,
+                               num_workers=mp.cpu_count()-4,
                               shuffle=False)
 
 print("Load duration : {}".format(time.time()-st))
@@ -59,7 +62,8 @@ print("[!] load data end")
 EGG_prior = FCAE()
 EGG_prior.cuda()
 EGG_prior = nn.DataParallel(EGG_prior)
-EGG_prior.load_state_dict(torch.load('./models/AAI_EGGAE/best_val.pth'))
+EGG_prior.load_state_dict(torch.load('./models/AAI_EGGAE/best_val-cosloss.pth'))
+EGG_prior.eval()
 
 STZ = FCEncoder()
 STZ.cuda()
@@ -90,10 +94,10 @@ MSE_criterion.cuda()
 
 # [STZ,ZTE,DC],[STZ_optimizer_enc,STZ_optimizer_gen,ZTE_optimizer,DC_optimizer] = amp.initialize([STZ,ZTE,DC],[STZ_optimizer_enc,STZ_optimizer_gen,ZTE_optimizer,DC_optimizer],opt_level = opt_level)
 
-scheduler_STZ_enc = StepLR(STZ_optimizer_enc,step_size=80,gamma = 0.1)
-scheduler_STZ_gen = StepLR(STZ_optimizer_gen,step_size=80,gamma = 0.1)
-scheduler_ZTE = StepLR(ZTE_optimizer,step_size=80,gamma = 0.1)
-scheduler_DC = StepLR(DC_optimizer,step_size=80,gamma = 0.1)
+scheduler_STZ_enc = StepLR(STZ_optimizer_enc,step_size=10,gamma = 0.9)
+scheduler_STZ_gen = StepLR(STZ_optimizer_gen,step_size=10,gamma = 0.9)
+scheduler_ZTE = StepLR(ZTE_optimizer,step_size=10,gamma = 0.9)
+scheduler_DC = StepLR(DC_optimizer,step_size=10,gamma = 0.9)
 
 # STZ = DDP(STZ)
 # ZTE = DDP(ZTE)
@@ -127,8 +131,8 @@ for epoch in range(n_epoch):
         
         z = STZ(x_train)
         recon = ZTE(z)
-        recon_loss = MSE_criterion(recon,y_train)
-        
+#         recon_loss = MSE_criterion(recon,y_train)
+        recon_loss = torch.mean(torch.acos(F.cosine_similarity(recon,y_train)))
 #         with amp.scale_loss(recon_loss, [STZ_optimizer_enc,ZTE_optimizer]) as scaled_loss:
 #             scaled_loss.backward()
         recon_loss.backward()
@@ -138,6 +142,11 @@ for epoch in range(n_epoch):
         
         #Discriminator
         STZ.eval()
+        
+        STZ.zero_grad()
+        ZTE.zero_grad()
+        DC.zero_grad()
+
         z_real = EGG_prior(y_train,extract = True)
         z_fake = STZ(x_train)
         DC_real = DC(z_real)
@@ -149,11 +158,15 @@ for epoch in range(n_epoch):
 #         with amp.scale_loss(DC_loss, DC_optimizer) as scaled_loss:
 #             scaled_loss.backward()
         DC_loss.backward()
-    
         DC_optimizer.step()
         
         #Generator
         STZ.train()
+
+        STZ.zero_grad()
+        ZTE.zero_grad()
+        DC.zero_grad()
+        
         z_fake = STZ(x_train)
         DC_fake = DC(z_fake)
         
@@ -178,10 +191,10 @@ for epoch in range(n_epoch):
     DC.eval()
     with torch.no_grad():
         for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
-            x_val,y_val = _y.float().cuda(),_y.float().cuda()
+            x_val,y_val = _x.float().cuda(),_y.float().cuda()
             z = STZ(x_val)
             recon = ZTE(z)
-            recon_loss = MSE_criterion(recon,y_val)
+            recon_loss= torch.mean(torch.acos(F.cosine_similarity(recon,y_val)))
             val_recon_loss+=recon_loss.item()/len(valid_loader)
     
     ## update scheduler, save model, write logs
@@ -190,9 +203,9 @@ for epoch in range(n_epoch):
     scheduler_STZ_enc.step()
     scheduler_STZ_gen.step()
     
-    torch.save(STZ.state_dict(), os.path.join(save_path,'%d_STZ.pth'%epoch))
-    torch.save(ZTE.state_dict(), os.path.join(save_path,'%d_ZTE.pth'%epoch))
-    torch.save(DC.state_dict(), os.path.join(save_path,'%d_DC.pth'%epoch))
+    torch.save(STZ.state_dict(), os.path.join(save_path,'%d_STZ-cosloss.pth'%epoch))
+    torch.save(ZTE.state_dict(), os.path.join(save_path,'%d_ZTE-cosloss.pth'%epoch))
+    torch.save(DC.state_dict(), os.path.join(save_path,'%d_DC-cosloss.pth'%epoch))
     
     log_writer.writerow([epoch,train_recon_loss,train_dc_loss,train_gen_loss,val_recon_loss])
     log.flush()

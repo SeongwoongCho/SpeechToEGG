@@ -3,7 +3,7 @@ import torch
 import random
 import numpy as np
 import colorednoise
-from scipy.signal import butter, lfilter, freqz
+from scipy.signal import butter, lfilter, freqz, filtfilt, medfilt, savgol_filter
 
 def seed_everything(seed=1234):
     random.seed(seed)
@@ -28,14 +28,49 @@ def butter_lowpass(cutoff, fs, order=5):
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     return b, a
 
-
 def butter_lowpass_filter(data, cutoff, fs, order=5):
     b, a = butter_lowpass(cutoff, fs, order=order)
     y = lfilter(b, a, data)
     return y
 
+def butter_highpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype="high", analog=False)
+    return b, a
+
+def butter_highpass_filter(data, cutoff, fs, order=5):
+    b, a = butter_highpass(cutoff, fs, order=order)
+    y = filtfilt(b, a, data)
+    return y
+
+def positions2onehot(pos, shape):
+    onehot = np.zeros(shape)
+    onehot[pos] = 1
+    return onehot
+
+def smooth(s, window_len=10, window="hanning"):
+    if window_len < 3:
+        return s
+
+    if window == "median":
+        y = medfilt(s, kernel_size=window_len)
+    elif window == "savgol":
+        y = savgol_filter(s, window_len, 0)
+    else:
+        if window == "flat":  # moving average
+            w = np.ones(window_len, "d")
+        else:
+            w = eval("np." + window + "(window_len)")
+
+        y = np.convolve(w / w.sum(), s, mode="same")
+
+    return y
+
+
 def normalize(y):
     return -1 + 2*(y-np.min(y))/(np.max(y)-np.min(y))
+#     return y/np.max(y)
 
 def add_whitenoise(x,db):
     E_x = np.mean(x**2)
@@ -80,3 +115,7 @@ def custom_aug(x):
 def release_list(a):
     a.clear()
     del a
+    
+def CosineDistanceLoss():
+    #To be implemented
+    return
