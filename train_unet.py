@@ -11,9 +11,9 @@ from torch.nn import functional as F
 
 from utils import *
 from dataloader import *
-from model_unet import Unet,Resv2Unet
+from model_unet import Unet
 from apex import amp
-from apex.parallel import DistributedDataParallel as DDP
+# from apex.parallel import DistributedDataParallel as DDP
 import multiprocessing as mp
 
 seed_everything(42)
@@ -21,8 +21,8 @@ seed_everything(42)
 
 save_path = './models/Unet/'
 os.makedirs(save_path,exist_ok=True)
-n_epoch = 200
-batch_size = 80000
+n_epoch = 70
+batch_size = 40000
 n_frame = 192
 window = int(n_frame*1.4)
 step = int(n_frame/2.5)
@@ -33,17 +33,19 @@ st = time.time()
 train_X,train_y,val_X,val_y = load_datas(n_frame,window,step)
 
 print(train_X.shape)
+print(train_y.shape)
 print(val_X.shape)
+print(val_y.shape)
 
 train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug = custom_aug)
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                                shuffle=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                               shuffle=False)
 
 print("Load duration : {}".format(time.time()-st))
@@ -53,18 +55,20 @@ model = Unet(nlayers = 4, nefilters = 10)
 model.cuda()
 
 criterion = nn.MSELoss()
-criterion.cuda()
+# criterion = CosineDistanceLoss()
+# criterion.cuda()
 optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
 
 opt_level = 'O1'
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
-scheduler = StepLR(optimizer,step_size=80,gamma = 0.3)
+scheduler = StepLR(optimizer,step_size=50,gamma = 0.1)
 model = nn.DataParallel(model)
 
 print("[*] training ...")
 log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
 log_writer = csv.writer(log)
 
+best_val = 100.
 for epoch in range(n_epoch):
     train_loss = 0.
     optimizer.zero_grad()
@@ -73,10 +77,10 @@ for epoch in range(n_epoch):
         x_train,y_train = _x.float().cuda(),_y.float().cuda()
         pred = model(x_train)
 
-#         loss = criterion(pred,y_train)
-        loss = torch.mean(torch.acos(F.cosine_similarity(pred,y_train)))
+        loss = criterion(pred,y_train)
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
+#         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         train_loss += loss.item() / len(train_loader)
@@ -87,13 +91,15 @@ for epoch in range(n_epoch):
         for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
             x_val,y_val = _x.float().cuda(),_y.float().cuda()
             pred = model(x_val)
-#             loss= criterion(pred,y_val)
-            loss = torch.mean(torch.acos(F.cosine_similarity(pred,y_val)))
+            loss= criterion(pred,y_val)
             val_loss += loss.item()/len(valid_loader)
     
     scheduler.step()
-    torch.save(model.state_dict(), os.path.join(save_path,'%d_Unet-cosloss.pth'%epoch))
     
+    if val_loss < best_val:
+        torch.save(model.state_dict(), os.path.join(save_path,'best-mseloss.pth'))
+        best_val = val_loss
+        
     log_writer.writerow([epoch,train_loss,val_loss])
     log.flush()
     print("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f "%

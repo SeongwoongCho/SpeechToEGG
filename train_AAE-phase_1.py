@@ -13,7 +13,7 @@ from utils import *
 from dataloader import *
 from model_AAE import FCAE, SimpleDiscriminator
 from apex import amp
-from apex.parallel import DistributedDataParallel as DDP
+# from apex.parallel import DistributedDataParallel as DDP
 
 import multiprocessing as mp
 
@@ -22,8 +22,8 @@ seed_everything(42)
 
 save_path = './models/AAI_EGGAE/'
 os.makedirs(save_path,exist_ok=True)
-n_epoch = 200
-batch_size = 80000
+n_epoch = 70
+batch_size = 40000
 n_frame = 192
 # (1.4-1)*2.5 >= 1 --> Can see all possible datas
 window = int(n_frame*1.4)
@@ -41,11 +41,11 @@ train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug 
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                                shuffle=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                               shuffle=False)
 
 print("Load duration : {}".format(time.time()-st))
@@ -58,16 +58,15 @@ print("[!] load data end")
 model = FCAE()
 model.cuda()
 
-criterion = nn.MSELoss()
-# critierion = CosineDistanceLoss()
-criterion.cuda()
+# criterion = nn.MSELoss()
+critierion = CosineDistanceLoss()
+# criterion.cuda()
 optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
 
 opt_level = 'O1'
 # assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
-scheduler = StepLR(optimizer,step_size=80,gamma = 0.1)
-
+scheduler = StepLR(optimizer,step_size=50,gamma = 0.1)
 model = nn.DataParallel(model)
 
 
@@ -89,6 +88,7 @@ for epoch in range(n_epoch):
         loss = torch.mean(torch.acos(F.cosine_similarity(pred,y_train)))    
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
+#         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         avg_loss += loss.item() / len(train_loader)

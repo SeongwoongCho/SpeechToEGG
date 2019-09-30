@@ -13,7 +13,7 @@ from utils import *
 from dataloader import *
 from model_AAE import *
 from apex import amp
-from apex.parallel import DistributedDataParallel as DDP
+# from apex.parallel import DistributedDataParallel as DDP
 
 import multiprocessing as mp
 
@@ -22,8 +22,8 @@ seed_everything(42)
 
 save_path = './models/AAI/'
 os.makedirs(save_path,exist_ok=True)
-n_epoch = 200
-batch_size = 80000
+n_epoch = 100
+batch_size = 40000
 n_frame = 192
 # (1.4 -1)*3 = 1.2 --> Can see all possible datas
 window = int(n_frame*1.4 )
@@ -44,11 +44,11 @@ train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug 
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                                shuffle=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()-4,
+                               num_workers=mp.cpu_count(),
                               shuffle=False)
 
 print("Load duration : {}".format(time.time()-st))
@@ -82,8 +82,9 @@ ZTE_optimizer = torch.optim.Adam(ZTE.parameters(), lr = gen_lr)
 STZ_optimizer_enc = torch.optim.Adam(STZ.parameters(), lr = reg_lr)
 DC_optimizer = torch.optim.Adam(DC.parameters(),lr = reg_lr)
 
-MSE_criterion = nn.MSELoss()
-MSE_criterion.cuda()
+# criterion = nn.MSELoss()
+criterion = CosineDistanceLoss()
+# criterion.cuda()
 
 # opt_level = 'O1'
 # assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
@@ -111,7 +112,7 @@ print("[*] training ...")
 
 log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
 log_writer = csv.writer(log)
-best_val_loss = 100
+best_val = 100.
 for epoch in range(n_epoch):
     train_recon_loss = 0.
     train_dc_loss = 0.
@@ -131,8 +132,7 @@ for epoch in range(n_epoch):
         
         z = STZ(x_train)
         recon = ZTE(z)
-#         recon_loss = MSE_criterion(recon,y_train)
-        recon_loss = torch.mean(torch.acos(F.cosine_similarity(recon,y_train)))
+        recon_loss = criterion(recon,y_train)
 #         with amp.scale_loss(recon_loss, [STZ_optimizer_enc,ZTE_optimizer]) as scaled_loss:
 #             scaled_loss.backward()
         recon_loss.backward()
@@ -203,9 +203,11 @@ for epoch in range(n_epoch):
     scheduler_STZ_enc.step()
     scheduler_STZ_gen.step()
     
-    torch.save(STZ.state_dict(), os.path.join(save_path,'%d_STZ-cosloss.pth'%epoch))
-    torch.save(ZTE.state_dict(), os.path.join(save_path,'%d_ZTE-cosloss.pth'%epoch))
-    torch.save(DC.state_dict(), os.path.join(save_path,'%d_DC-cosloss.pth'%epoch))
+    if val_recon_loss < best_val:
+        torch.save(STZ.state_dict(), os.path.join(save_path,'STZ-cosloss.pth'))
+        torch.save(ZTE.state_dict(), os.path.join(save_path,'ZTE-cosloss.pth'))
+        torch.save(DC.state_dict(), os.path.join(save_path,'DC-cosloss.pth'))
+        best_val = val_recon_loss
     
     log_writer.writerow([epoch,train_recon_loss,train_dc_loss,train_gen_loss,val_recon_loss])
     log.flush()

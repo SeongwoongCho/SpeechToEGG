@@ -1,5 +1,6 @@
 import os
 import torch
+from torch.nn import functional as F
 import random
 import numpy as np
 import colorednoise
@@ -117,5 +118,6 @@ def release_list(a):
     del a
     
 def CosineDistanceLoss():
-    #To be implemented
-    return
+    def f(pred,true):
+        return torch.mean(torch.acos(F.cosine_similarity(pred,true)))
+    return f
