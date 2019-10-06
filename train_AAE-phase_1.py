@@ -9,6 +9,7 @@ from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
 from torch.nn import functional as F
 
+from radam import RAdam,Lookahead
 from utils import *
 from dataloader import *
 from model_AAE import FCAE, SimpleDiscriminator
@@ -61,7 +62,9 @@ model.cuda()
 # criterion = nn.MSELoss()
 critierion = CosineDistanceLoss()
 # criterion.cuda()
-optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
+# optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
+optimizer = RAdam(model.parameters(), lr= learning_rate)
+optimizer = Lookahead(optimizer, alpha=0.5,k=5)
 
 opt_level = 'O1'
 # assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
@@ -104,7 +107,7 @@ for epoch in range(n_epoch):
             val_loss += loss.item()/len(valid_loader)
     scheduler.step()
     if val_loss < best_val_loss:
-        torch.save(model.state_dict(), os.path.join(save_path,'best_val-cosloss.pth'))
+        torch.save(model.state_dict(), os.path.join(save_path,'best_val-cosloss-ranger.pth'))
         best_val_loss = val_loss
     
     log_writer.writerow([epoch,avg_loss,val_loss])

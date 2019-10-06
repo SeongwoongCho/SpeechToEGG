@@ -17,6 +17,7 @@ class FCEncoder(nn.Module):
         for batch,lin in zip(self.batches,self.module_list):
             x = F.relu(batch(lin(x)))
 #             x = F.dropout(x,self.drop_rate,self.training)
+# TODO : 여기 마지막 단 Tanh넣어서 다시 돌리기
         x = x.unsqueeze(-1)
         return x
         

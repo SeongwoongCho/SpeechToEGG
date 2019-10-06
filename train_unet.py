@@ -9,9 +9,10 @@ from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
 from torch.nn import functional as F
 
+from radam import RAdam,Lookahead
 from utils import *
 from dataloader import *
-from model_unet import Unet
+from model_unet import Unet,Resv2Unet
 from apex import amp
 # from apex.parallel import DistributedDataParallel as DDP
 import multiprocessing as mp
@@ -19,10 +20,10 @@ import multiprocessing as mp
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Unet/'
+save_path = './models/Resv2Unet/'
 os.makedirs(save_path,exist_ok=True)
-n_epoch = 70
-batch_size = 40000
+n_epoch = 100
+batch_size = 11000
 n_frame = 192
 window = int(n_frame*1.4)
 step = int(n_frame/2.5)
@@ -51,17 +52,19 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-model = Unet(nlayers = 4, nefilters = 10)
+model = Resv2Unet(nlayers = 4, nefilters = 15,filter_size = 15,merge_filter_size = 5)
 model.cuda()
 
-criterion = nn.MSELoss()
-# criterion = CosineDistanceLoss()
+# criterion = nn.MSELoss()
+criterion = CosineDistanceLoss()
 # criterion.cuda()
-optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
+# optimizer = torch.optim.Adam(model.parameters(), lr= learning_rate)
+optimizer = RAdam(model.parameters(), lr= learning_rate)
+optimizer = Lookahead(optimizer, alpha=0.5, k=5)
 
 opt_level = 'O1'
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
-scheduler = StepLR(optimizer,step_size=50,gamma = 0.1)
+scheduler = StepLR(optimizer,step_size=70,gamma = 0.1)
 model = nn.DataParallel(model)
 
 print("[*] training ...")
@@ -77,7 +80,12 @@ for epoch in range(n_epoch):
         x_train,y_train = _x.float().cuda(),_y.float().cuda()
         pred = model(x_train)
 
+#         pred_diff = pred[:,1:,:]-pred[:,:-1,:]
+#         y_train_diff = y_train[:,1:,:] - y_train[:,:-1,:]
+        
+#         loss = criterion(pred,y_train) + criterion(pred_diff,y_train_diff)
         loss = criterion(pred,y_train)
+    
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
 #         loss.backward()
@@ -91,13 +99,19 @@ for epoch in range(n_epoch):
         for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
             x_val,y_val = _x.float().cuda(),_y.float().cuda()
             pred = model(x_val)
-            loss= criterion(pred,y_val)
+            
+#             pred_diff = pred[:,1:,:]-pred[:,:-1,:]
+#             y_val_diff = y_val[:,1:,:] - y_val[:,:-1,:]
+        
+#             loss = criterion(pred,y_val) + criterion(pred_diff,y_val_diff)
+            loss = criterion(pred,y_val)
+    
             val_loss += loss.item()/len(valid_loader)
     
     scheduler.step()
     
     if val_loss < best_val:
-        torch.save(model.state_dict(), os.path.join(save_path,'best-mseloss.pth'))
+        torch.save(model.state_dict(), os.path.join(save_path,'best-cosloss-Ranger-2.pth'))
         best_val = val_loss
         
     log_writer.writerow([epoch,train_loss,val_loss])

@@ -24,8 +24,10 @@ class BottleneckV2(nn.Module):
         residual = x
         x = self.bn1(x)
         x = F.relu(x)
-        if self.downsample:residual = self.downsample(x)
-        if self.upsample:residual = self.upsample(x)
+        if self.downsample:
+            residual = self.downsample(x)
+        if self.upsample:
+            residual = self.upsample(x)
 
         x = self.conv1(x)
 
@@ -120,7 +122,7 @@ class SEBasicBlock(nn.Module):
         return x + residual
     
 class Unet(nn.Module):
-    def __init__(self,nlayers = 12,nefilters=24, filter_size = 15, merge_filter_size = 5):
+    def __init__(self,nlayers = 12,nefilters=24, filter_size = 15, merge_filter_size = 5, dilation = 1):
         super(Unet, self).__init__()
         self.num_layers = nlayers
         self.nefilters = nefilters
@@ -133,8 +135,8 @@ class Unet(nn.Module):
         dchannelout = echannelout[::-1]
         dchannelin = [dchannelout[0]*2]+[(i) * nefilters + (i - 1) * nefilters for i in range(nlayers,1,-1)]
         for i in range(self.num_layers):
-            self.encoder.append(nn.Conv1d(echannelin[i],echannelout[i],filter_size,padding=filter_size//2))
-            self.decoder.append(nn.Conv1d(dchannelin[i],dchannelout[i],merge_filter_size,padding=merge_filter_size//2))
+            self.encoder.append(nn.Conv1d(echannelin[i],echannelout[i],filter_size,padding=filter_size//2,dilation = dilation))
+            self.decoder.append(nn.Conv1d(dchannelin[i],dchannelout[i],merge_filter_size,padding=merge_filter_size//2,dilation = dilation))
             self.ebatch.append(nn.BatchNorm1d(echannelout[i]))
             self.dbatch.append(nn.BatchNorm1d(dchannelout[i]))
 
@@ -174,10 +176,10 @@ class Unet(nn.Module):
 
         x = self.out(x)
         x = x.squeeze(1).unsqueeze(-1)
-        return x
-
+        return x    
+    
 class Resv2Unet(nn.Module):
-    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,mode = 'v2'):
         super(Resv2Unet, self).__init__()
 
         self.num_layers = nlayers
@@ -189,7 +191,10 @@ class Resv2Unet(nn.Module):
         #self.upsample = nn.ModuleList()
         #echannelin = [24, 24, 48, 72, 96, 124, 144, 168, 192, 216, 240, 264]
         #echannelout = [24, 48, 72, 96, 124, 144, 168, 192, 216, 240, 264, 288]
-        echannelin = [24] + [(i + 1) * nefilters for i in range(nlayers - 1)]
+        if mode == 'v1':
+            echannelin = [24] + [(i + 1) * nefilters for i in range(nlayers - 1)]    
+        else:
+            echannelin = [nefilters] + [(i + 1) * nefilters for i in range(nlayers - 1)]
         echannelout = [(i + 1) * nefilters for i in range(nlayers)]
         dchannelout = echannelout[::-1]
         upsamplec = [dchannelout[0]] + [(i) * nefilters for i in range(nlayers, 1, -1)]
@@ -199,7 +204,10 @@ class Resv2Unet(nn.Module):
             #self.downsample.append(SEBasicBlock(echannelout[i],echannelout[i],filter_size))
             #self.upsample.append(SEBasicBlock(upsamplec[i], upsamplec[i],merge_filter_size))
             self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,upsample=True))
-        self.first = nn.Conv1d(1,24,filter_size,padding=filter_size//2)
+        if mode == 'v1':
+            self.first = nn.Conv1d(1,24,filter_size,padding=filter_size//2)
+        else:
+            self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
         self.outbatch = nn.BatchNorm1d(nefilters+1)
         self.out = nn.Sequential(

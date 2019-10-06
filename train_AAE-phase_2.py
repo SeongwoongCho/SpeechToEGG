@@ -8,6 +8,7 @@ from torch import nn
 from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
 from torch.nn import functional as F
+from radam import RAdam,Lookahead
 
 from utils import *
 from dataloader import *
@@ -29,8 +30,8 @@ n_frame = 192
 window = int(n_frame*1.4 )
 step = int(n_frame/2.5)
 
-gen_lr = 2e-3
-reg_lr = 2e-3
+gen_lr = 1e-2
+reg_lr = 1e-2
 EPS = 1e-12
 
 print("[*] load data ...")
@@ -62,7 +63,7 @@ print("[!] load data end")
 EGG_prior = FCAE()
 EGG_prior.cuda()
 EGG_prior = nn.DataParallel(EGG_prior)
-EGG_prior.load_state_dict(torch.load('./models/AAI_EGGAE/best_val-cosloss.pth'))
+EGG_prior.load_state_dict(torch.load('./models/AAI_EGGAE/best_val-cosloss-ranger.pth'))
 EGG_prior.eval()
 
 STZ = FCEncoder()
@@ -74,13 +75,25 @@ DC = SimpleDiscriminator()
 DC.cuda()
 
 #encoder/decoder optimizers
-STZ_optimizer_gen = torch.optim.Adam(STZ.parameters(), lr = gen_lr)
-ZTE_optimizer = torch.optim.Adam(ZTE.parameters(), lr = gen_lr)
+# STZ_optimizer_gen = torch.optim.Adam(STZ.parameters(), lr = gen_lr)
+# ZTE_optimizer = torch.optim.Adam(ZTE.parameters(), lr = gen_lr)
+
+STZ_optimizer_gen = RAdam(STZ.parameters(), lr = gen_lr)
+ZTE_optimizer = RAdam(ZTE.parameters(), lr = gen_lr)
+
+STZ_optimizer_gen = Lookahead(STZ_optimizer_gen, alpha=0.5,k=5)
+ZTE_optimizer = Lookahead(ZTE_optimizer, alpha=0.5,k=5)
 
 #regularizing optimizer
 
-STZ_optimizer_enc = torch.optim.Adam(STZ.parameters(), lr = reg_lr)
-DC_optimizer = torch.optim.Adam(DC.parameters(),lr = reg_lr)
+# STZ_optimizer_enc = torch.optim.Adam(STZ.parameters(), lr = reg_lr)
+# DC_optimizer = torch.optim.Adam(DC.parameters(),lr = reg_lr)
+
+STZ_optimizer_enc = RAdam(STZ.parameters(), lr = reg_lr)
+DC_optimizer = RAdam(DC.parameters(),lr = reg_lr)
+
+STZ_optimizer_enc = Lookahead(STZ_optimizer_enc, alpha=0.5,k=5)
+DC_optimizer = Lookahead(DC_optimizer, alpha=0.5,k=5)
 
 # criterion = nn.MSELoss()
 criterion = CosineDistanceLoss()
@@ -95,10 +108,10 @@ criterion = CosineDistanceLoss()
 
 # [STZ,ZTE,DC],[STZ_optimizer_enc,STZ_optimizer_gen,ZTE_optimizer,DC_optimizer] = amp.initialize([STZ,ZTE,DC],[STZ_optimizer_enc,STZ_optimizer_gen,ZTE_optimizer,DC_optimizer],opt_level = opt_level)
 
-scheduler_STZ_enc = StepLR(STZ_optimizer_enc,step_size=10,gamma = 0.9)
-scheduler_STZ_gen = StepLR(STZ_optimizer_gen,step_size=10,gamma = 0.9)
-scheduler_ZTE = StepLR(ZTE_optimizer,step_size=10,gamma = 0.9)
-scheduler_DC = StepLR(DC_optimizer,step_size=10,gamma = 0.9)
+scheduler_STZ_enc = StepLR(STZ_optimizer_enc,step_size=50,gamma = 0.1)
+scheduler_STZ_gen = StepLR(STZ_optimizer_gen,step_size=50,gamma = 0.1)
+scheduler_ZTE = StepLR(ZTE_optimizer,step_size=50,gamma = 0.1)
+scheduler_DC = StepLR(DC_optimizer,step_size=50,gamma = 0.1)
 
 # STZ = DDP(STZ)
 # ZTE = DDP(ZTE)
@@ -204,9 +217,9 @@ for epoch in range(n_epoch):
     scheduler_STZ_gen.step()
     
     if val_recon_loss < best_val:
-        torch.save(STZ.state_dict(), os.path.join(save_path,'STZ-cosloss.pth'))
-        torch.save(ZTE.state_dict(), os.path.join(save_path,'ZTE-cosloss.pth'))
-        torch.save(DC.state_dict(), os.path.join(save_path,'DC-cosloss.pth'))
+        torch.save(STZ.state_dict(), os.path.join(save_path,'STZ-cosloss-ranger.pth'))
+        torch.save(ZTE.state_dict(), os.path.join(save_path,'ZTE-cosloss-ranger.pth'))
+        torch.save(DC.state_dict(), os.path.join(save_path,'DC-cosloss-ranger.pth'))
         best_val = val_recon_loss
     
     log_writer.writerow([epoch,train_recon_loss,train_dc_loss,train_gen_loss,val_recon_loss])

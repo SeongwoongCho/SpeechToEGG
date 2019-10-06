@@ -80,10 +80,10 @@ def corrected_naylor_metrics(ref_signal, est_signal):
                 falsealarms.extend(est_GCIs_in_cycle)
 
     estimation_distance = estimation_distance[np.invert(np.isnan(estimation_distance))]
-
-    identification_rate = nHit / nCycles
-    miss_rate = nMiss / nCycles
-    false_alarm_rate = nFalse / nCycles
+ 
+    identification_rate = nHit / nCycles if nCycles!=0 else 0
+    miss_rate = nMiss / nCycles if nCycles!=0 else 0
+    false_alarm_rate = nFalse / nCycles if nCycles!=0 else 0
     identification_accuracy = (
         0 if np.size(estimation_distance) == 0 else np.std(estimation_distance)
     )
