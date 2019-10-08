@@ -17,9 +17,13 @@ def seed_everything(seed=1234):
 seed_everything(42)
 
 def check_data(x,y,threshold):
-    if(np.max(x) - np.min(x) < 0.1):
+    if(np.max(x[:192]) - np.min(x[:192]) < 0.1):
         return False
-    if(np.max(y)-np.min(y)<threshold):
+    if(np.max(y[:192])-np.min(y[:192])<threshold):
+        return False
+    if(np.max(x[-192:]) - np.min(x[-192:]) < 0.1):
+        return False
+    if(np.max(y[-192:])-np.min(y[-192:])<threshold):
         return False
     return True
 
@@ -101,13 +105,13 @@ def custom_aug(x,normal_noise,musical_noise):
             pi = random.randint(0,len(musical_noise)-1)
             pi2 = random.randint(0,len(musical_noise[pi])-193)
             y = musical_noise[pi][pi2:pi2+192]
-            if check_data(y,y,0.1):
+            if np.max(y)-np.min(y)>0.1:
                 y = normalize(y)
         else:
             pi = random.randint(0,len(normal_noise)-1)
             pi2 = random.randint(0,len(normal_noise[pi])-193)
             y = normal_noise[pi][pi2:pi2+192]
-            if check_data(y,y,0.1):
+            if np.max(y)-np.min(y)>0.1:
                 y = normalize(y)
     else:
         if p < 0.8:

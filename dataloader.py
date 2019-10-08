@@ -16,7 +16,7 @@ def process(t): ## args : drt, file,window,step
     X,y = [],[]
 
     x,sr = librosa.load(drt+file,sr=16000,mono=False)
-    itvs = librosa.effects.split(x[0],frame_length = int(window*0.75), hop_length = int(window*0.5),top_db = 25)
+    itvs = librosa.effects.split(x[0],frame_length = int(window*0.5), hop_length = int(window*0.25),top_db = 25)
     
     ## EGG와 Speech 모두 잡음성분 제거
 #     x[0] = butter_lowpass_filter(x[0],2500,16000)
@@ -66,7 +66,7 @@ def load_noise():
     for file in tqdm(os.listdir('./datasets/TrainData/normal_noise/')):
         tmp = np.array([])
         x,sr = librosa.load('./datasets/TrainData/normal_noise/' + file,sr=16000)
-        itvs = librosa.effects.split(x,frame_length = 128, hop_length = 64,top_db = 25)
+        itvs = librosa.effects.split(x,frame_length = 96, hop_length = 48,top_db = 25)
         for st,ed in itvs:
             tmp = np.concatenate((tmp,x[st:ed]))
         normal_noise.append(tmp.astype('float32'))
