@@ -74,45 +74,50 @@ def normalize(y):
 #     return y/np.max(y)
 
 def add_whitenoise(x,db):
-    E_x = np.mean(x**2)
     noise = np.random.normal(0,1,x.shape)
-    E_noise = np.mean(noise**2)
-    
-    a = E_x/(E_noise*(10**(db/10)))
-    lam = 1/(1+a)
-    
-    return lam*x+(1-lam)*noise
+    return mix_db(x,noise,db)
 
 def add_pinknoise(x,db):
-    E_x = np.mean(x**2)
     noise = colorednoise.powerlaw_psd_gaussian(1,x.shape[0])
-    E_noise = np.mean(noise**2)
-    
-    a = E_x/(E_noise*(10**(db/10)))
-    lam = 1/(1+a)
-    
-    return lam*x+(1-lam)*noise
+    return mix_db(x,noise,db)
 
 def add_brownnoise(x,db):
-    E_x = np.mean(x**2)
-    noise = colorednoise.powerlaw_psd_gaussian(1,x.shape[0])
-    E_noise = np.mean(noise**2)
-    
-    a = E_x/(E_noise*(10**(db/10)))
-    lam = 1/(1+a)
-    
-    return lam*x+(1-lam)*noise
+    noise = colorednoise.powerlaw_psd_gaussian(2,x.shape[0])
+    return mix_db(x,noise,db)
 
-def custom_aug(x):
+def mix_db(x,y,db):
+    E_x = np.mean(x**2)
+    E_y = np.mean(y**2)
+    
+    a = E_x/(E_y*(10**(db/10)))
+    lam = 1/(1+a)
+    return lam*x+(1-lam)*y
+
+def custom_aug(x,normal_noise,musical_noise):
     db =np.random.uniform(low=-5,high=45)
     p = np.random.uniform()
-    if p<0.33:
-        return add_whitenoise(x,db)
-    elif p<0.66:
-        return add_pinknoise(x,db)
+    if p<0.7:
+        if p<0.45:
+            pi = random.randint(0,len(musical_noise)-1)
+            pi2 = random.randint(0,len(musical_noise[pi])-193)
+            y = musical_noise[pi][pi2:pi2+192]
+            if check_data(y,y,0.1):
+                y = normalize(y)
+        else:
+            pi = random.randint(0,len(normal_noise)-1)
+            pi2 = random.randint(0,len(normal_noise[pi])-193)
+            y = normal_noise[pi][pi2:pi2+192]
+            if check_data(y,y,0.1):
+                y = normalize(y)
     else:
-        return add_brownnoise(x,db)
-    
+        if p < 0.8:
+            y = np.random.normal(0,1,x.shape) #whitenoise
+        elif p < 0.9:
+            y = colorednoise.powerlaw_psd_gaussian(1,x.shape[0]) #pinknoise
+        else:
+            y = colorednoise.powerlaw_psd_gaussian(2,x.shape[0]) # brownnoise
+    return mix_db(x,y,db)
+
 def release_list(a):
     a.clear()
     del a

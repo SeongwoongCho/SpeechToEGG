@@ -1,0 +1,26 @@
+
+CMU ARCTIC BDL
+
+This directory contains a recording of the phonetically balanced US
+English CMU ARCTIC database by BDL, a US English speaker.
+
+See http://www.festvox.org/cmu_arctic/ for details on the 
+database coverage and other recordings of this dataset
+
+The format follows the Festvox (http://www.festvox.org) directory
+structure.
+
+The directory structure is 
+ orig/
+     stereo signal plus Electroglottograph at 32KHz, RIFF headered
+ etc/txt.done.data
+     prompts
+
+You can extract the channels (anmd down sample) from the original
+stereo recording with Edinburgh Speech Tools ch_wave
+
+   ch_wave -c 0 -F 16000 orig/arctic_a0001.wav -o wav/arctic_a0001.wav
+   ch_wave -c 1 -F 16000 orig/arctic_a0001.wav -o lar/arctic_a0001.lar
+
+Note that some powernormalization and clipping may have been done from
+these originals to the waveforms in the standard distribution.

@@ -20,10 +20,10 @@ import multiprocessing as mp
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Resv2Unet/'
+save_path = './models/Resv2Unet_heavy/'
 os.makedirs(save_path,exist_ok=True)
 n_epoch = 100
-batch_size = 11000
+batch_size = 6000
 n_frame = 192
 window = int(n_frame*1.4)
 step = int(n_frame/2.5)
@@ -52,7 +52,7 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-model = Resv2Unet(nlayers = 4, nefilters = 15,filter_size = 15,merge_filter_size = 5)
+model = Resv2Unet(nlayers = 5, nefilters = 32,filter_size = 15,merge_filter_size = 5)
 model.cuda()
 
 # criterion = nn.MSELoss()
@@ -64,7 +64,7 @@ optimizer = Lookahead(optimizer, alpha=0.5, k=5)
 
 opt_level = 'O1'
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
-scheduler = StepLR(optimizer,step_size=70,gamma = 0.1)
+scheduler = StepLR(optimizer,step_size=80,gamma = 0.1)
 model = nn.DataParallel(model)
 
 print("[*] training ...")
@@ -111,7 +111,7 @@ for epoch in range(n_epoch):
     scheduler.step()
     
     if val_loss < best_val:
-        torch.save(model.state_dict(), os.path.join(save_path,'best-cosloss-Ranger-2.pth'))
+        torch.save(model.state_dict(), os.path.join(save_path,'best-cosloss-Ranger.pth'))
         best_val = val_loss
         
     log_writer.writerow([epoch,train_loss,val_loss])

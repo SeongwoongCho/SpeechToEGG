@@ -1,15 +1,17 @@
 # SpeechToEGG
 speech to egg transformation via deep neural network
 
-|Model Num|Model name       |Methodology                   |Validation Loss| Hyper Parameters                |
-|---------|-----------------|------------------------------|---------------|---------------------------------|
-|1        |Wave Unet 4,10   |Cosine Distance Loss          |0.244799       |70,40000,192,1e-2,StepLr(50,0.1) |
-|2        |AAI              |Cosine Distance Loss          |0.290648       |100,40000,192,2e-3,StepLr(10,0.9)|
-|3        |Wave Unet 4,10   |MSE Loss                      |               |70,40000,192,1e-2,StepLr(50,0.1) |
-|4        |Wave Unet 4,10   |Cosine Distance Loss(EGG+DEGG)|0.646573       |70,40000,192,1e-2,StepLr(50,0.1) |
-|5        |Wave Unet 4,10   |Cosine Distance Loss + Ranger |0.247205       |70,40000,192,1e-2,StepLr(50,0.1) |
-|6        |Resv2Unet 4,10,15|Cosine Distance Loss + Ranger |0.193103       |70,16000,192,1e-2,StepLr(50,0.1) |
-|7        |Resv2Unet 4,15,15|Cosine Distance Loss + Ranger |0.161064       |100,11000,192,1e-2,StepLr(70,0.1)|
+<<<<<<< HEAD
+|Model Num|Model name         |Methodology                   |Validation Loss| Hyper Parameters                |
+|---------|-------------------|------------------------------|---------------|---------------------------------|
+|1        |Wave Unet 4,10     |Cosine Distance Loss          |0.244799       |70,40000,192,1e-2,StepLr(50,0.1) |
+|2        |AAI                |Cosine Distance Loss          |0.290648       |100,40000,192,2e-3,StepLr(10,0.9)|
+|3        |Wave Unet 4,10     |MSE Loss                      |               |70,40000,192,1e-2,StepLr(50,0.1) |
+|4        |Wave Unet 4,10     |Cosine Distance Loss(EGG+DEGG)|0.646573       |70,40000,192,1e-2,StepLr(50,0.1) |
+|5        |Wave Unet 4,10     |Cosine Distance Loss + Ranger |0.247205       |70,40000,192,1e-2,StepLr(50,0.1) |
+|6        |Resv2Unet 4,10,15,5|Cosine Distance Loss + Ranger |0.193103       |70,16000,192,1e-2,StepLr(50,0.1) |
+|7        |Resv2Unet 4,15,15,5|Cosine Distance Loss + Ranger |0.161064       |110,11000,192,1e-2,StepLr(85,0.1)|
+|8        |Resv2Unet 4,20,9,5|Cosine Distance Loss + Ranger |0.145366       |90,8000,192,1e-2,StepLr(85,0.1)|
 
 # Test Results
 
@@ -46,7 +48,7 @@ smooth = 15 (exp 6,7)
 | 7-DEGG_low(15)|92.51%|1.83%|5.66%|0.43ms| 100%        | 0%  | 0%  | 0ms   |
 | 7-EGG_high(15)|91.32%|1.72%|6.96%|0.78ms| 100%        | 0%  | 0%  | 0ms   |
 | 7-EGG_low(15) |91.60%|1.67%|6.73%|0.53ms| 100%        | 0%  | 0%  | 0ms   |
-|7-DEGG_high(49)|91.40%|2.37%|6.23%|0.92ms| 100%        | 0%  | 0%  | 0ms   |
-| 7-DEGG_low(49)|92.51%|1.83%|5.66%|0.43ms| 100%        | 0%  | 0%  | 0ms   |
-| 7-EGG_high(49)|91.32%|1.72%|6.96%|0.78ms| 100%        | 0%  | 0%  | 0ms   |
-| 7-EGG_low(49) |91.60%|1.67%|6.73%|0.53ms| 100%        | 0%  | 0%  | 0ms   |
+|7-DEGG_high(49)|92.61%|2.73%|4.66%|1.00ms| 100%        | 0%  | 0%  | 0ms   |
+| 7-DEGG_low(49)|93.64%|2.23%|4.13%|0.48ms| 100%        | 0%  | 0%  | 0ms   |
+| 7-EGG_high(49)|92.07%|2.50%|5.42%|0.86ms| 100%        | 0%  | 0%  | 0ms   |
+| 7-EGG_low(49) |92.33%|2.47%|5.20%|0.62ms| 100%        | 0%  | 0%  | 0ms   |
