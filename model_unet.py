@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.nn import functional as F
 
 class BottleneckV2(nn.Module):
@@ -179,7 +180,7 @@ class Unet(nn.Module):
         return x    
     
 class Resv2Unet(nn.Module):
-    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,mode = 'v2'):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5):
         super(Resv2Unet, self).__init__()
 
         self.num_layers = nlayers
@@ -187,33 +188,65 @@ class Resv2Unet(nn.Module):
         
         self.encoder = nn.ModuleList()
         self.decoder = nn.ModuleList()
-        #self.downsample=nn.ModuleList()
-        #self.upsample = nn.ModuleList()
-        #echannelin = [24, 24, 48, 72, 96, 124, 144, 168, 192, 216, 240, 264]
-        #echannelout = [24, 48, 72, 96, 124, 144, 168, 192, 216, 240, 264, 288]
-        if mode == 'v1':
-            echannelin = [24] + [(i + 1) * nefilters for i in range(nlayers - 1)]    
-        else:
-            echannelin = [nefilters] + [(i + 1) * nefilters for i in range(nlayers - 1)]
+        echannelin = [nefilters] + [(i + 1) * nefilters for i in range(nlayers - 1)]
         echannelout = [(i + 1) * nefilters for i in range(nlayers)]
         dchannelout = echannelout[::-1]
         upsamplec = [dchannelout[0]] + [(i) * nefilters for i in range(nlayers, 1, -1)]
         dchannelin = [dchannelout[0] * 2] + [(i) * nefilters + (i - 1) * nefilters for i in range(nlayers, 1, -1)]
         for i in range(self.num_layers):
             self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,downsample=True))
-            #self.downsample.append(SEBasicBlock(echannelout[i],echannelout[i],filter_size))
-            #self.upsample.append(SEBasicBlock(upsamplec[i], upsamplec[i],merge_filter_size))
             self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,upsample=True))
-        if mode == 'v1':
-            self.first = nn.Conv1d(1,24,filter_size,padding=filter_size//2)
-        else:
-            self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
+        self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
         self.outbatch = nn.BatchNorm1d(nefilters+1)
         self.out = nn.Sequential(
             nn.Conv1d(nefilters + 1, 1, 1),
             nn.Tanh()
         )
+    def forward(self,x):
+        encoder = list()
+        
+        x = x.squeeze(-1).unsqueeze(1)
+        
+        input = x
+        x = self.first(x)
+        for i in range(self.num_layers):
+            x = self.encoder[i](x)
+            encoder.append(x)
+            x = x[:, :, ::2]
+        x = self.middle(x)
+        for i in range(self.num_layers):
+            x = F.upsample(x,scale_factor=2,mode='linear')
+            x = torch.cat([x,encoder[self.num_layers - i - 1]],dim=1)
+            x = self.decoder[i](x)
+        x = torch.cat([x,input],dim=1)
+        x = self.outbatch(x)
+        x = F.leaky_relu(x)
+        x = self.out(x)
+
+        x = x.squeeze(1).unsqueeze(-1)
+        return x
+
+class band_block(nn.Module):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5):
+        super(Resv2Unet, self).__init__()
+
+        self.num_layers = nlayers
+        self.nefilters = nefilters
+        
+        self.encoder = nn.ModuleList()
+        self.decoder = nn.ModuleList()
+        echannelin = [nefilters] + [(i + 1) * nefilters for i in range(nlayers - 1)]
+        echannelout = [(i + 1) * nefilters for i in range(nlayers)]
+        dchannelout = echannelout[::-1]
+        upsamplec = [dchannelout[0]] + [(i) * nefilters for i in range(nlayers, 1, -1)]
+        dchannelin = [dchannelout[0] * 2] + [(i) * nefilters + (i - 1) * nefilters for i in range(nlayers, 1, -1)]
+        for i in range(self.num_layers):
+            self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,downsample=True))
+            self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,upsample=True))
+        self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
+        self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
+        
     def forward(self,x):
         encoder = list()
         
@@ -232,11 +265,43 @@ class Resv2Unet(nn.Module):
             #x = self.upsample[i](x)
             x = torch.cat([x,encoder[self.num_layers - i - 1]],dim=1)
             x = self.decoder[i](x)
-        x = torch.cat([x,input],dim=1)
-        x = self.outbatch(x)
-        x = F.leaky_relu(x)
-        x = self.out(x)
-
-        x = x.squeeze(1).unsqueeze(-1)
+        x = torch.cat([x,input],dim=1) ## [bs,channel,n_frame]
         return x
     
+class MultibandResv2Unet(nn.Module):
+    def __init__(self,nlayers = 5,nefilters=16,filter_size = 9,merge_filter_size = 3,n_band = 4):
+        super(MultibandResv2Unet, self).__init__()
+        
+        assert 96%n_band ==0, "n_band should divide n_frame//2"
+        
+        self.n_band = n_band
+        self.seg_frame = 192/n_band
+        self.band_unets = nn.ModuleList()
+        self.full_band_unet = band_block(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size)
+        for _ in range(n_band):
+            self.band_unets.append(band_block(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size))
+        
+        self.outfilters = nefilters*(n_band+1)+2
+        self.outbatch = nn.BatchNorm1d(self.outfilters)
+        self.out = nn.Sequential(
+            nn.Conv1d(self.outfilters, 1, 1),
+            nn.Tanh()
+        )     
+    def forward(self,x):
+        ## x = [bs,n_frame,1]
+        band_results = []
+        for i in range(self.n_band):
+            band_results.append(self.band_unets[i](x[:,i*self.seg_frame:(i+1)*self.seg_frame,:])) ## [bs,channel1,n_frame/n_band]
+        
+        bands_output = torch.cat(band_results,dim=2) ## [bs,channel1,n_frame]
+        full_band_output = self.full_band_unet(x) ## [bs,channel2,n_frame]
+        
+        full_band_output = torch.cat([full_band_output,bands_output],dim=1) ## [bs,channel1+channel2,n_frame]
+        
+        full_band_output = self.outbatch(full_band_output)
+        full_band_output = F.leaky_relu(full_band_output)
+        full_band_output = self.out(x) ## [bs,1,n_frame]
+
+        full_band_output = full_band_output.squeeze(1).unsqueeze(-1) ##[bs,n_frame,1]
+        
+        return full_band_output

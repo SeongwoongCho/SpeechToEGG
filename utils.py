@@ -98,10 +98,10 @@ def mix_db(x,y,db):
     return lam*x+(1-lam)*y
 
 def custom_aug(x,normal_noise,musical_noise):
-    db =np.random.uniform(low=-5,high=45)
+    db =np.random.uniform(low=-5,high=35)
     p = np.random.uniform()
-    if p<0.7:
-        if p<0.45:
+    if p<0.9 and db>0:
+        if p<0.55:
             pi = random.randint(0,len(musical_noise)-1)
             pi2 = random.randint(0,len(musical_noise[pi])-193)
             y = musical_noise[pi][pi2:pi2+192]
@@ -114,12 +114,13 @@ def custom_aug(x,normal_noise,musical_noise):
             if np.max(y)-np.min(y)>0.1:
                 y = normalize(y)
     else:
-        if p < 0.8:
-            y = np.random.normal(0,1,x.shape) #whitenoise
-        elif p < 0.9:
+        if p < 0.94:
+            y = colorednoise.powerlaw_psd_gaussian(0,x.shape[0]) #whitenoise
+        elif p < 0.98:
             y = colorednoise.powerlaw_psd_gaussian(1,x.shape[0]) #pinknoise
         else:
             y = colorednoise.powerlaw_psd_gaussian(2,x.shape[0]) # brownnoise
+        y = normalize(y)
     return mix_db(x,y,db)
 
 def release_list(a):

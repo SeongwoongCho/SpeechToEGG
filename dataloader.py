@@ -4,7 +4,7 @@ from tqdm import tqdm
 from utils import *
 import librosa
 import random
-import multiprocessing
+import multiprocessing as mp
 import torch.utils.data
 from sklearn.model_selection import train_test_split
 
@@ -38,7 +38,7 @@ def process(t): ## args : drt, file,window,step
    
 def load_datas(n_frame,window,step):
     X,y = [],[]
-    pool = multiprocessing.Pool(multiprocessing.cpu_count())
+    pool = mp.Pool(mp.cpu_count())
     
     print("load Train Data")
     args = []
@@ -100,3 +100,36 @@ class Dataset(torch.utils.data.Dataset):
         if self.aug:
             _x = self.aug(_x,self.normal_noise,self.musical_noise)
         return np.expand_dims(_x,axis=-1).astype('float32'),np.expand_dims(_y,axis=-1).astype('float32')
+    
+class Dataset_fft(torch.utils.data.Dataset):
+    def __init__(self,X,y,n_frame,is_train,aug = None):
+        self.X = X
+        self.y = y
+        self.n_frame = n_frame
+        self.is_train = is_train
+        self.aug = aug
+        self.n_fft=192
+        if is_train:
+            print("load noise")
+            self.normal_noise, self.musical_noise = load_noise()
+    def __len__(self):
+        return len(self.X)
+    def __getitem__(self,idx):
+        if len(self.X[idx]) == self.n_frame:
+            pi = 0
+        else:
+            pi = random.randint(0,len(self.X[idx])-self.n_frame-1)
+        _x,_y = self.X[idx][pi:pi+self.n_frame],self.y[idx][pi:pi+self.n_frame]
+        _x = normalize(_x)
+        _y = normalize(_y)
+        if self.aug:
+            _x = self.aug(_x,self.normal_noise,self.musical_noise)
+        _x_fft = fft(_x,self.n_fft)
+        _x_fft = np.abs(_x_fft[0:self.n_fft//2]) ## [self.n_fft//2,]
+        
+        _x = np.expand_dims(_x,axis=-1).astype('float32')
+        _y = np.expand_dims(_y,axis=-1).astype('float32')
+#         _x_fft = np.expand_dims(_x_fft,axis=-1).astype('float32') # [self.n_fft//2,1]
+        _x_fft = np.tile(_x_fft,(192,1)) # [192,self.n_fft//2]
+        _x = np.concatenate([_x,_x_fft],axis=-1)
+        return _x,_y

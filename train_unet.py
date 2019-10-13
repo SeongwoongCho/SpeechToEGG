@@ -20,14 +20,14 @@ import multiprocessing as mp
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Resv2Unet_heavy/'
+save_path = './models/Resv2Unet_heavy_finetune/'
 os.makedirs(save_path,exist_ok=True)
-n_epoch = 100
-batch_size = 6000
+n_epoch = 20
+batch_size = 8000
 n_frame = 192
 window = int(n_frame*1.4)
 step = int(n_frame/2.5)
-learning_rate = 1e-2
+learning_rate = 4e-4
 
 print("[*] load data ...")
 st = time.time()
@@ -52,7 +52,7 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-model = Resv2Unet(nlayers = 5, nefilters = 32,filter_size = 15,merge_filter_size = 5)
+model = Resv2Unet(nlayers = 5, nefilters = 32,filter_size = 15,merge_filter_size = 5,inp_channel = 97)
 model.cuda()
 
 # criterion = nn.MSELoss()
@@ -66,6 +66,8 @@ opt_level = 'O1'
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
 scheduler = StepLR(optimizer,step_size=80,gamma = 0.1)
 model = nn.DataParallel(model)
+
+# model.load_state_dict(torch.load("./models/Resv2Unet_heavy_continue/best-cosloss-Ranger.pth"))
 
 print("[*] training ...")
 log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
