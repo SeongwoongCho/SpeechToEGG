@@ -12,11 +12,11 @@ seed_everything(42)
 
 def process(t): ## args : drt, file,window,step
 
-    drt,file,window,step = t
+    drt,file,window,step,n_frame = t
     X,y = [],[]
 
     x,sr = librosa.load(drt+file,sr=16000,mono=False)
-    itvs = librosa.effects.split(x[0],frame_length = int(window*0.5), hop_length = int(window*0.25),top_db = 25)
+    itvs = librosa.effects.split(x[0],frame_length = n_frame+1, hop_length = step,top_db = 25)
     
     ## EGG와 Speech 모두 잡음성분 제거
 #     x[0] = butter_lowpass_filter(x[0],2500,16000)
@@ -28,11 +28,9 @@ def process(t): ## args : drt, file,window,step
         while(i*step+window < len(speech)):
             tmp_speech = speech[i*step:i*step+window]
             tmp_egg = egg[i*step:i*step+window]
-            if check_data(tmp_speech,tmp_egg,0.2):
+            if check_data(tmp_speech,tmp_egg,0.2,n_frame):
                 X.append(tmp_speech)
                 y.append(tmp_egg)
-#             X.append(tmp_speech)
-#             y.append(tmp_egg)
             i+=1
     return (X,y)
    
@@ -45,7 +43,7 @@ def load_datas(n_frame,window,step):
     for drt in ['./datasets/TrainData/Alexis/','./datasets/TrainData/vietnam/','./datasets/TrainData/CMU/','./datasets/TrainData/saarbrucken/']:
         for file in os.listdir(drt):
             if 'wav' in file:
-                args.append((drt,file,window,step))
+                args.append((drt,file,window,step,n_frame))
 
     tmp = pool.map(process,args)
     for _x,_y in tmp:
@@ -60,20 +58,24 @@ def load_datas(n_frame,window,step):
     train_X,val_X, train_y, val_y = train_test_split(X, y, test_size=0.3, random_state=42)
     return train_X, train_y, val_X, val_y
 
-def load_noise():
+def load_noise(n_frame = 192):
     musical_noise= []
     normal_noise = []
     for file in tqdm(os.listdir('./datasets/TrainData/normal_noise/')):
         tmp = np.array([])
         x,sr = librosa.load('./datasets/TrainData/normal_noise/' + file,sr=16000)
-        itvs = librosa.effects.split(x,frame_length = 96, hop_length = 48,top_db = 25)
+        itvs = librosa.effects.split(x,frame_length = n_frame+1, hop_length = n_frame//4,top_db = 25)
         for st,ed in itvs:
             tmp = np.concatenate((tmp,x[st:ed]))
         normal_noise.append(tmp.astype('float32'))
         
     for file in tqdm(os.listdir('./datasets/TrainData/musical_noise/')):
+        tmp = np.array([])
         x,sr = librosa.load('./datasets/TrainData/musical_noise/' + file,sr=16000)
-        musical_noise.append(x.astype('float32'))
+        itvs = librosa.effects.split(x,frame_length = n_frame+1, hop_length = n_frame//4,top_db = 25)
+        for st,ed in itvs:
+            tmp = np.concatenate((tmp,x[st:ed]))
+        musical_noise.append(tmp.astype('float32'))
     
     return normal_noise, musical_noise
         
@@ -86,7 +88,7 @@ class Dataset(torch.utils.data.Dataset):
         self.aug = aug
         if is_train:
             print("load noise")
-            self.normal_noise, self.musical_noise = load_noise()
+            self.normal_noise, self.musical_noise = load_noise(n_frame)
     def __len__(self):
         return len(self.X)
     def __getitem__(self,idx):
@@ -111,7 +113,7 @@ class Dataset_fft(torch.utils.data.Dataset):
         self.n_fft=192
         if is_train:
             print("load noise")
-            self.normal_noise, self.musical_noise = load_noise()
+            self.normal_noise, self.musical_noise = load_noise(n_frame)
     def __len__(self):
         return len(self.X)
     def __getitem__(self,idx):

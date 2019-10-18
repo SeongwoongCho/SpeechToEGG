@@ -16,15 +16,12 @@ def seed_everything(seed=1234):
     
 seed_everything(42)
 
-def check_data(x,y,threshold):
-    if(np.max(x[:192]) - np.min(x[:192]) < 0.1):
-        return False
-    if(np.max(y[:192])-np.min(y[:192])<threshold):
-        return False
-    if(np.max(x[-192:]) - np.min(x[-192:]) < 0.1):
-        return False
-    if(np.max(y[-192:])-np.min(y[-192:])<threshold):
-        return False
+def check_data(x,y,threshold,n_frame=192):
+    for i in range(0,len(x),n_frame//4):
+        if(np.max(x[i:i+n_frame]) - np.min(x[i:i+n_frame]) < 0.1):
+            return False
+        if(np.max(y[i:i+n_frame])-np.min(y[i:i+n_frame])<threshold):
+            return False
     return True
 
 def butter_lowpass(cutoff, fs, order=5):
@@ -74,7 +71,7 @@ def smooth(s, window_len=10, window="hanning"):
 
 
 def normalize(y):
-    return -1 + 2*(y-np.min(y))/(np.max(y)-np.min(y))
+    return -1 + 2*(y-np.min(y))/(np.max(y)-np.min(y)+1e-3)
 #     return y/np.max(y)
 
 def add_whitenoise(x,db):
@@ -97,31 +94,33 @@ def mix_db(x,y,db):
     lam = 1/(1+a)
     return lam*x+(1-lam)*y
 
-def custom_aug(x,normal_noise,musical_noise):
-    db =np.random.uniform(low=-5,high=35)
-    p = np.random.uniform()
-    if p<0.9 and db>0:
-        if p<0.55:
-            pi = random.randint(0,len(musical_noise)-1)
-            pi2 = random.randint(0,len(musical_noise[pi])-193)
-            y = musical_noise[pi][pi2:pi2+192]
-            if np.max(y)-np.min(y)>0.1:
-                y = normalize(y)
+def custom_aug(n_frame = 192):
+    def _custom_aug(x,normal_noise,musical_noise):
+        db =np.random.uniform(low=-5,high=35)
+        p = np.random.uniform()
+        if p<0.9 and db>0:
+            if p<0.55:
+                pi = random.randint(0,len(musical_noise)-1)
+                pi2 = random.randint(0,len(musical_noise[pi])-n_frame-1)
+                y = musical_noise[pi][pi2:pi2+n_frame]
+                if np.max(y)-np.min(y)>0.1:
+                    y = normalize(y)
+            else:
+                pi = random.randint(0,len(normal_noise)-1)
+                pi2 = random.randint(0,len(normal_noise[pi])-n_frame-1)
+                y = normal_noise[pi][pi2:pi2+n_frame]
+                if np.max(y)-np.min(y)>0.1:
+                    y = normalize(y)
         else:
-            pi = random.randint(0,len(normal_noise)-1)
-            pi2 = random.randint(0,len(normal_noise[pi])-193)
-            y = normal_noise[pi][pi2:pi2+192]
-            if np.max(y)-np.min(y)>0.1:
-                y = normalize(y)
-    else:
-        if p < 0.94:
-            y = colorednoise.powerlaw_psd_gaussian(0,x.shape[0]) #whitenoise
-        elif p < 0.98:
-            y = colorednoise.powerlaw_psd_gaussian(1,x.shape[0]) #pinknoise
-        else:
-            y = colorednoise.powerlaw_psd_gaussian(2,x.shape[0]) # brownnoise
-        y = normalize(y)
-    return mix_db(x,y,db)
+            if p < 0.94:
+                y = colorednoise.powerlaw_psd_gaussian(0,x.shape[0]) #whitenoise
+            elif p < 0.98:
+                y = colorednoise.powerlaw_psd_gaussian(1,x.shape[0]) #pinknoise
+            else:
+                y = colorednoise.powerlaw_psd_gaussian(2,x.shape[0]) # brownnoise
+            y = normalize(y)
+        return mix_db(x,y,db)
+    return _custom_aug
 
 def release_list(a):
     a.clear()

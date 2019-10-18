@@ -294,3 +294,34 @@ def extract_quotient_metrics(true_egg, estimated_egg, detrend_egg=False, fs=1600
 
     metrics.update(fnames)
     return metrics
+
+def detect_voiced_region(true_egg, reconstructed_egg, power_threshold=0.01):
+    def _get_signal_power(x, window):
+        power = np.convolve(x ** 2, window / window.sum(), mode="same")
+        return power
+
+    def _get_window(window_len=10, window="flat"):
+        if window == "flat":  # average
+            w = np.ones(window_len, "d")
+        else:
+            w = eval("np." + window + "(window_len)")
+
+        return w
+
+    true_scaler = pd.Series(np.abs(true_egg)).nlargest(100).median()
+    reconstructed_scaler = pd.Series(np.abs(reconstructed_egg)).nlargest(100).median()
+
+    true_egg = true_egg / true_scaler
+    reconstructed_egg = reconstructed_egg / reconstructed_scaler
+
+    window = _get_window(window_len=501, window="hanning")
+    power = _get_signal_power(true_egg, window)
+
+    regions = power >= power_threshold
+    true_egg_voiced = true_egg[regions]
+    reconstructed_egg_voiced = reconstructed_egg[regions]
+
+    return (
+        true_egg_voiced * true_scaler,
+        reconstructed_egg_voiced * reconstructed_scaler,
+    )

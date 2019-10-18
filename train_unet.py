@@ -20,14 +20,14 @@ import multiprocessing as mp
 seed_everything(42)
 ###Hyper parameters
 
-save_path = './models/Resv2Unet_heavy_finetune/'
+save_path = './models/Resv2Unet_long_frame_continue/'
 os.makedirs(save_path,exist_ok=True)
 n_epoch = 20
-batch_size = 8000
-n_frame = 192
-window = int(n_frame*1.4)
-step = int(n_frame/2.5)
-learning_rate = 4e-4
+batch_size = 14500
+n_frame = 320
+window = int(n_frame*1.25)
+step = int(n_frame/4)
+learning_rate = 1e-3
 
 print("[*] load data ...")
 st = time.time()
@@ -38,7 +38,7 @@ print(train_y.shape)
 print(val_X.shape)
 print(val_y.shape)
 
-train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug = custom_aug)
+train_dataset = Dataset(train_X,train_y,n_frame = n_frame, is_train = True, aug = custom_aug(n_frame))
 valid_dataset = Dataset(val_X,val_y,n_frame = n_frame, is_train = False)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
@@ -52,7 +52,7 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 print("Load duration : {}".format(time.time()-st))
 print("[!] load data end")
 
-model = Resv2Unet(nlayers = 5, nefilters = 32,filter_size = 15,merge_filter_size = 5,inp_channel = 97)
+model = Resv2Unet(nlayers = 5, nefilters = 32,filter_size = 15,merge_filter_size = 5)
 model.cuda()
 
 # criterion = nn.MSELoss()
@@ -64,10 +64,10 @@ optimizer = Lookahead(optimizer, alpha=0.5, k=5)
 
 opt_level = 'O1'
 model,optimizer = amp.initialize(model,optimizer,opt_level = opt_level)
-scheduler = StepLR(optimizer,step_size=80,gamma = 0.1)
+scheduler = StepLR(optimizer,step_size=30,gamma = 0.1)
 model = nn.DataParallel(model)
 
-# model.load_state_dict(torch.load("./models/Resv2Unet_heavy_continue/best-cosloss-Ranger.pth"))
+model.load_state_dict(torch.load("./models/Resv2Unet_long_frame_continue/best-cosloss-Ranger.pth"))
 
 print("[*] training ...")
 log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
@@ -81,11 +81,6 @@ for epoch in range(n_epoch):
     for idx,(_x,_y) in enumerate(tqdm(train_loader)):
         x_train,y_train = _x.float().cuda(),_y.float().cuda()
         pred = model(x_train)
-
-#         pred_diff = pred[:,1:,:]-pred[:,:-1,:]
-#         y_train_diff = y_train[:,1:,:] - y_train[:,:-1,:]
-        
-#         loss = criterion(pred,y_train) + criterion(pred_diff,y_train_diff)
         loss = criterion(pred,y_train)
     
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -101,11 +96,6 @@ for epoch in range(n_epoch):
         for idx,(_x,_y) in enumerate(tqdm(valid_loader)):
             x_val,y_val = _x.float().cuda(),_y.float().cuda()
             pred = model(x_val)
-            
-#             pred_diff = pred[:,1:,:]-pred[:,:-1,:]
-#             y_val_diff = y_val[:,1:,:] - y_val[:,:-1,:]
-        
-#             loss = criterion(pred,y_val) + criterion(pred_diff,y_val_diff)
             loss = criterion(pred,y_val)
     
             val_loss += loss.item()/len(valid_loader)
