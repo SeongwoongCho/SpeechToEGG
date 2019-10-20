@@ -71,7 +71,9 @@ def smooth(s, window_len=10, window="hanning"):
 
 
 def normalize(y):
-    return -1 + 2*(y-np.min(y))/(np.max(y)-np.min(y)+1e-3)
+    if np.max(y)-np.min(y) < 1e-1:
+        return y
+    return -1 + 2*(y-np.min(y))/(np.max(y)-np.min(y))
 #     return y/np.max(y)
 
 def add_whitenoise(x,db):

@@ -16,7 +16,7 @@ def process(t): ## args : drt, file,window,step
     X,y = [],[]
 
     x,sr = librosa.load(drt+file,sr=16000,mono=False)
-    itvs = librosa.effects.split(x[0],frame_length = n_frame+1, hop_length = step,top_db = 25)
+    itvs = librosa.effects.split(x[0],frame_length = n_frame+1, hop_length = step,top_db = 20)
     
     ## EGG와 Speech 모두 잡음성분 제거
 #     x[0] = butter_lowpass_filter(x[0],2500,16000)

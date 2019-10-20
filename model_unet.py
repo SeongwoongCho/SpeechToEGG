@@ -2,76 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.nn import functional as F
+from torch.autograd import Variable
 
-class BottleneckV2(nn.Module):
-    def __init__(self, in_channels,channels,ks, stride=1,upsample=False,downsample=False):
-        super(BottleneckV2, self).__init__()
-        self.bn1 = nn.BatchNorm1d(in_channels)
-        self.conv1 = nn.Conv1d(in_channels, channels//4, 1, stride=1, bias=False)
-        self.bn2 = nn.BatchNorm1d(channels//4)
-        self.conv2 = nn.Conv1d(channels//4,channels//4, ks, stride=stride, padding=ks//2,bias=False)
-        self.bn3 = nn.BatchNorm1d(channels//4)
-        self.conv3 = nn.Conv1d(channels//4,channels, 1, stride=1, bias=False)
-        if downsample:
-            self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
-        else:
-            self.downsample = None
-        if upsample:
-            self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
-        else:
-            self.upsample = None
-
-    def forward(self,x):
-        residual = x
-        x = self.bn1(x)
-        x = F.relu(x)
-        if self.downsample:
-            residual = self.downsample(x)
-        if self.upsample:
-            residual = self.upsample(x)
-
-        x = self.conv1(x)
-
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-
-        x = self.bn3(x)
-        x = F.relu(x)
-        x = self.conv3(x)
-        #print(x.shape,residual.shape)
-        return x + residual
-
-
-class BasicBlockV2(nn.Module):
-    def __init__(self, in_channels,channels,ks, stride=1,upsample=False,downsample=False):
-        super(BasicBlockV2, self).__init__()
-        self.bn1 = nn.BatchNorm1d(in_channels)
-        self.conv1 = nn.Conv1d(in_channels,channels, ks, stride=stride, padding=ks//2,bias=False)
-        self.bn2 = nn.BatchNorm1d(channels)
-        self.conv2 = nn.Conv1d(channels,channels, ks, stride=stride, padding=ks//2,bias=False)
-        if downsample:
-            self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
-        else:
-            self.downsample = None
-        if upsample:
-            self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
-        else:
-            self.upsample = None
-
-    def forward(self, x):
-        residual = x
-        x = self.bn1(x)
-        x = F.relu(x)
-        if self.downsample:
-            residual = self.downsample(x)
-        if self.upsample:
-            residual = self.upsample(x)
-        x = self.conv1(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        return x + residual
+def swish(x):
+    return x * torch.sigmoid(x)
 
 class SELayer(nn.Module):
     def __init__(self, channel, reduction=4):
@@ -88,42 +22,9 @@ class SELayer(nn.Module):
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1)
         return x * y
-
-
-class SEBasicBlock(nn.Module):
-    def __init__(self, in_channels,channels,ks, stride=1,upsample=False,downsample=False):
-        super(SEBasicBlock, self).__init__()
-        self.bn1 = nn.BatchNorm1d(in_channels)
-        self.conv1 = nn.Conv1d(in_channels,channels, ks, stride=stride, padding=ks//2,bias=False)
-        self.bn2 = nn.BatchNorm1d(channels)
-        self.conv2 = nn.Conv1d(channels,channels, ks, stride=stride, padding=ks//2,bias=False)
-        self.se = SELayer(channels, reduction=4)
-        if downsample:
-            self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
-        else:
-            self.downsample = None
-        if upsample:
-            self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
-        else:
-            self.upsample = None
-
-    def forward(self, x):
-        residual = x
-        x = self.bn1(x)
-        x = F.relu(x)
-        if self.downsample:
-            residual = self.downsample(x)
-        if self.upsample:
-            residual = self.upsample(x)
-        x = self.conv1(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = self.se(x)
-        return x + residual
     
 class Unet(nn.Module):
-    def __init__(self,nlayers = 12,nefilters=24, filter_size = 15, merge_filter_size = 5, dilation = 1):
+    def __init__(self,nlayers = 12,nefilters=24, filter_size = 15, merge_filter_size = 5):
         super(Unet, self).__init__()
         self.num_layers = nlayers
         self.nefilters = nefilters
@@ -136,8 +37,8 @@ class Unet(nn.Module):
         dchannelout = echannelout[::-1]
         dchannelin = [dchannelout[0]*2]+[(i) * nefilters + (i - 1) * nefilters for i in range(nlayers,1,-1)]
         for i in range(self.num_layers):
-            self.encoder.append(nn.Conv1d(echannelin[i],echannelout[i],filter_size,padding=filter_size//2,dilation = dilation))
-            self.decoder.append(nn.Conv1d(dchannelin[i],dchannelout[i],merge_filter_size,padding=merge_filter_size//2,dilation = dilation))
+            self.encoder.append(nn.Conv1d(echannelin[i],echannelout[i],filter_size,padding=filter_size//2))
+            self.decoder.append(nn.Conv1d(dchannelin[i],dchannelout[i],merge_filter_size,padding=merge_filter_size//2))
             self.ebatch.append(nn.BatchNorm1d(echannelout[i]))
             self.dbatch.append(nn.BatchNorm1d(dchannelout[i]))
 
@@ -177,10 +78,33 @@ class Unet(nn.Module):
 
         x = self.out(x)
         x = x.squeeze(1).unsqueeze(-1)
-        return x    
+        return x
     
+class SEBasicBlock(nn.Module):
+    def __init__(self, in_channels,channels,ks, stride=1, act = 'relu'):
+        super(SEBasicBlock, self).__init__()
+        self.bn1 = nn.BatchNorm1d(in_channels)
+        self.conv1 = nn.Conv1d(in_channels,channels, ks, stride=stride, padding=ks//2,bias=False)
+        self.bn2 = nn.BatchNorm1d(channels)
+        self.conv2 = nn.Conv1d(channels,channels, ks, stride=stride, padding=ks//2,bias=False)
+        self.se = SELayer(channels, reduction=4)
+        self.act = act
+        self.res_sample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
+
+    def forward(self, x):
+#         residual = x
+        residual = self.res_sample(x) ##residual with convolutional sampling
+        x = self.bn1(x)
+        x = F.relu(x) if self.act == 'relu' else swish(x)
+        x = self.conv1(x)
+        x = self.bn2(x)
+        x = F.relu(x) if self.act == 'relu' else swish(x)
+        x = self.conv2(x)
+        x = self.se(x)
+        return x + residual
+
 class Resv2Unet(nn.Module):
-    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,act = 'relu'):
         super(Resv2Unet, self).__init__()
 
         self.num_layers = nlayers
@@ -194,8 +118,8 @@ class Resv2Unet(nn.Module):
         upsamplec = [dchannelout[0]] + [(i) * nefilters for i in range(nlayers, 1, -1)]
         dchannelin = [dchannelout[0] * 2] + [(i) * nefilters + (i - 1) * nefilters for i in range(nlayers, 1, -1)]
         for i in range(self.num_layers):
-            self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,downsample=True))
-            self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,upsample=True))
+            self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,act=act))
+            self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,act=act))
         self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
         self.outbatch = nn.BatchNorm1d(nefilters+1)
@@ -203,10 +127,11 @@ class Resv2Unet(nn.Module):
             nn.Conv1d(nefilters + 1, 1, 1),
             nn.Tanh()
         )
-    def forward(self,x):
+        
+    def forward(self,x,extract = False):
         encoder = list()
         
-        x = x.squeeze(-1).unsqueeze(1)
+        x = x.squeeze(-1).unsqueeze(1) ## bs,1,n_frame
         
         input = x
         x = self.first(x)
@@ -220,15 +145,54 @@ class Resv2Unet(nn.Module):
             x = torch.cat([x,encoder[self.num_layers - i - 1]],dim=1)
             x = self.decoder[i](x)
         x = torch.cat([x,input],dim=1)
+        
+        if extract:
+            return x.transpose(1, 2)  ## bs,n_frame,nefilters+1
+        
         x = self.outbatch(x)
         x = F.leaky_relu(x)
         x = self.out(x)
+        return x.squeeze(1).unsqueeze(-1)
+"""
 
-        x = x.squeeze(1).unsqueeze(-1)
-        return x
+밑에건 옛날 코드
 
-class band_block(nn.Module):
-    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5):
+    
+class SEBasicBlock(nn.Module):
+    def __init__(self, in_channels,channels,ks, stride=1,act = 'relu',upsample=False,downsample=False):
+        super(SEBasicBlock, self).__init__()
+        self.bn1 = nn.BatchNorm1d(in_channels)
+        self.conv1 = nn.Conv1d(in_channels,channels, ks, stride=stride, padding=ks//2,bias=False)
+        self.bn2 = nn.BatchNorm1d(channels)
+        self.conv2 = nn.Conv1d(channels,channels, ks, stride=stride, padding=ks//2,bias=False)
+        self.se = SELayer(channels, reduction=4)
+        self.act = act
+        if downsample:
+            self.downsample = nn.Conv1d(in_channels,channels, 1, stride, bias=False)
+        else:
+            self.downsample = None
+        if upsample:
+            self.upsample = nn.Conv1d(in_channels, channels, 1, stride, bias=False)
+        else:
+            self.upsample = None
+
+    def forward(self, x):
+        residual = x
+        x = self.bn1(x)
+        x = F.relu(x) if self.act == 'relu' else swish(x)
+        if self.downsample:
+            residual = self.downsample(x)
+        if self.upsample:
+            residual = self.upsample(x)
+        x = self.conv1(x)
+        x = self.bn2(x)
+        x = F.relu(x) if self.act == 'relu' else swish(x)
+        x = self.conv2(x)
+        x = self.se(x)
+        return x + residual
+      
+class Resv2Unet(nn.Module):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,act = 'relu'):
         super(Resv2Unet, self).__init__()
 
         self.num_layers = nlayers
@@ -242,15 +206,20 @@ class band_block(nn.Module):
         upsamplec = [dchannelout[0]] + [(i) * nefilters for i in range(nlayers, 1, -1)]
         dchannelin = [dchannelout[0] * 2] + [(i) * nefilters + (i - 1) * nefilters for i in range(nlayers, 1, -1)]
         for i in range(self.num_layers):
-            self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,downsample=True))
-            self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,upsample=True))
+            self.encoder.append(SEBasicBlock(echannelin[i],echannelout[i],filter_size,act=act,downsample=True))
+            self.decoder.append(SEBasicBlock(dchannelin[i], dchannelout[i],merge_filter_size,act=act,upsample=True))
         self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
+        self.outbatch = nn.BatchNorm1d(nefilters+1)
+        self.out = nn.Sequential(
+            nn.Conv1d(nefilters + 1, 1, 1),
+            nn.Tanh()
+        )
         
-    def forward(self,x):
+    def forward(self,x,extract = False):
         encoder = list()
         
-        x = x.squeeze(-1).unsqueeze(1)
+        x = x.squeeze(-1).unsqueeze(1) ## bs,1,n_frame
         
         input = x
         x = self.first(x)
@@ -258,50 +227,46 @@ class band_block(nn.Module):
             x = self.encoder[i](x)
             encoder.append(x)
             x = x[:, :, ::2]
-            #x = self.downsample[i](x)
         x = self.middle(x)
         for i in range(self.num_layers):
             x = F.upsample(x,scale_factor=2,mode='linear')
-            #x = self.upsample[i](x)
             x = torch.cat([x,encoder[self.num_layers - i - 1]],dim=1)
             x = self.decoder[i](x)
-        x = torch.cat([x,input],dim=1) ## [bs,channel,n_frame]
-        return x
-    
-class MultibandResv2Unet(nn.Module):
-    def __init__(self,nlayers = 5,nefilters=16,filter_size = 9,merge_filter_size = 3,n_band = 4):
-        super(MultibandResv2Unet, self).__init__()
+        x = torch.cat([x,input],dim=1)
         
-        assert 96%n_band ==0, "n_band should divide n_frame//2"
+        if extract:
+            return x.squeeze(1).unsqueeze(-1)  ## bs,n_frame,nefilters+1
         
-        self.n_band = n_band
-        self.seg_frame = 192/n_band
-        self.band_unets = nn.ModuleList()
-        self.full_band_unet = band_block(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size)
-        for _ in range(n_band):
-            self.band_unets.append(band_block(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size))
-        
-        self.outfilters = nefilters*(n_band+1)+2
-        self.outbatch = nn.BatchNorm1d(self.outfilters)
-        self.out = nn.Sequential(
-            nn.Conv1d(self.outfilters, 1, 1),
-            nn.Tanh()
-        )     
-    def forward(self,x):
-        ## x = [bs,n_frame,1]
-        band_results = []
-        for i in range(self.n_band):
-            band_results.append(self.band_unets[i](x[:,i*self.seg_frame:(i+1)*self.seg_frame,:])) ## [bs,channel1,n_frame/n_band]
-        
-        bands_output = torch.cat(band_results,dim=2) ## [bs,channel1,n_frame]
-        full_band_output = self.full_band_unet(x) ## [bs,channel2,n_frame]
-        
-        full_band_output = torch.cat([full_band_output,bands_output],dim=1) ## [bs,channel1+channel2,n_frame]
-        
-        full_band_output = self.outbatch(full_band_output)
-        full_band_output = F.leaky_relu(full_band_output)
-        full_band_output = self.out(x) ## [bs,1,n_frame]
+        x = self.outbatch(x)
+        x = F.leaky_relu(x)
+        x = self.out(x)
+        return x.squeeze(1).unsqueeze(-1)
+"""
 
-        full_band_output = full_band_output.squeeze(1).unsqueeze(-1) ##[bs,n_frame,1]
+class ULSTM(nn.Module):
+    def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1,bidirectional=True):
+        super(ULSTM, self).__init__()
+        self.num_directions = 2 if bidirectional else 1
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish')
+        self.lstm = nn.LSTM(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=bidirectional)
+        self.out = nn.Sequential(
+            nn.Linear(hidden_size*self.num_directions,1),
+            nn.Tanh()
+        )
+
+    def forward(self,x):
+        """
+        x : B,1,T
+        """
+        inputs = self.UBlock(x,extract=True)
+        """
+        inputs : B,T,nefilters+1
+        """
+        output, (hidden,cell) = self.lstm(inputs)
         
-        return full_band_output
+        # Many-to-Many
+        output = self.out(output) # B,T,H -> B,T,1
+        
+        return output
