@@ -1,9 +1,10 @@
 # SpeechToEGG
 speech to egg transformation via deep neural network
 
-+ for add data
-++ for swish activation function
-
+- +  : for add data
+- ++ : for swish activation function
+- +++ : augmentation을 바꿈.(X/normal/musical 중 하나 추가, white/brown/pink 중 하나 추가 하도록), pathology data 삭제
+- * 숫자 : exp숫자 의 변형
 |Model Num|Model name            |Methodology                   |Validation Loss| Hyper Parameters                    |data_prep |
 |---------|----------------------|------------------------------|---------------|-------------------------------------|----------|
 |1        |Wave Unet 4,10        |Cosine Distance Loss          |0.244799       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? | 
@@ -20,8 +21,8 @@ speech to egg transformation via deep neural network
 |12       |Resv2Unet+ 5,48,15,5  |Cosine Distance Loss + Ranger |0.117401       |90,13000,256,1e-2,StepLr(80,0.1)     |1.25, 4, top_db = 15|
 |13       |ULSTM 5,32,15,5,10,1,T|Cosine Distance Loss + Ranger |12보다 잘안됨  |80,10000,320,1e-2,StepLr(65,0.1)     |1.25, 4, top_db = 15|
 |14       |Resv2Unet++ 4,64,25,9 |Cosine Distance Loss + Ranger |왠지 모르겠는데 잘안됨|80,9600,256,1e-2,StepLr(70,0.1)|1.25, 4, top_db = 20|
-|15       |ULSTM 5,32,15,5,10,1,T|Cosine Distance Loss + Ranger |               |FineTuning EXP 12 5ep for LSTM, 15ep for Entire |1.25, 4, top_db = 15|
-
+|15       |Resv2Unet+++ 5,64,15,5|Cosine Distance Loss + Ranger |0.098998       |95,8000,256,1e-2,StepLr(80,0.1)     |1.25, 4, top_db = 20|
+|16(* 9)  |ULSTM+++ 3,128,15,5,20,3|Cosine Distance Loss + Ranger |             |100,9000,256,1e-2,StepLr(80,0.1)     |1.4, 2.5 top_db = 20|
 
 
 # Test Results
