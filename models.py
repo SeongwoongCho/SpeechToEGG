@@ -1,4 +1,5 @@
 import torch
+import encoding ## pip install torch-encoding . For synchnonized Batch norm in pytorch 1.0.0
 import torch.nn as nn
 import numpy as np
 from torch.nn import functional as F
@@ -131,7 +132,8 @@ class Resv2Unet(nn.Module):
         
         self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
-        self.outbatch = nn.BatchNorm1d(nefilters+1)
+        self.outbatch = encoding.nn.BatchNorm1d(nefilters+1)
+#         self.outbatch = nn.BatchNorm1d(nefilters+1)
         self.out = nn.Sequential(
             nn.Conv1d(nefilters + 1, 1, 1),
             nn.Tanh()
@@ -172,8 +174,8 @@ class ULSTM(nn.Module):
         
         self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish')
 
-        self.encoder = nn.LSTM(nefilters+1,hidden_size,num_layers,batch_first=True)
-        self.decoder = nn.LSTM(hidden_size,hidden_size,num_layers,batch_first=True)
+        self.encoder = nn.LSTM(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.decoder = nn.LSTM(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
         self.out = nn.Sequential(
             nn.Linear(hidden_size,1),
             nn.Tanh()

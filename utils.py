@@ -163,7 +163,7 @@ def release_list(a):
     
 def CosineDistanceLoss():
     def f(pred,true):
-        return torch.mean(torch.acos(F.cosine_similarity(pred,true)))
+        return torch.mean(torch.acos(F.cosine_similarity(pred,true,dim=1,eps = 1e-4)),dim=0)
     return f
 
 def print_verbose(verbose):

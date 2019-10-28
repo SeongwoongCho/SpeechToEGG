@@ -11,6 +11,8 @@ from torch import nn
 from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
 from torch.nn import functional as F
+import torch.distributed as dist
+
 
 from radam import RAdam,Lookahead
 from utils import *
@@ -19,14 +21,18 @@ from models import Unet,Resv2Unet,ULSTM
 
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
-# import horovod.torch as hvd
+
+def reduce_tensor(tensor):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.reduce_op.SUM)
+    rt /= 4
+    return rt
 
 seed_everything(42)
 ###Hyper parameters
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default = 8192)
-parser.add_argument('--val_batch_size', type=int, default = 8192)
 parser.add_argument('--epoch',type=int, default = 100)
 parser.add_argument('--lr', type=float, default = 1e-2)
 parser.add_argument('--lr_step', type=int, default = 65)
@@ -47,7 +53,6 @@ is_test = args.test
 ##training parameters
 n_epoch = args.epoch if not is_test else 1
 batch_size = args.batch_size
-val_batch_size = args.val_batch_size
 ##model parameters
 
 ##data preprocessing parameters##
@@ -83,9 +88,6 @@ if not verbose:
     warnings.filterwarnings(action='ignore')
 logging = print_verbose(verbose)
 
-# logging(hvd.size())
-# logging(hvd.local_rank())
-
 logging("[*] load data ...")
 st = time.time()
 # train_X,train_y,val_X,val_y = load_datas(n_frame,window,step,top_db,is_test,hvd.local_rank())
@@ -107,7 +109,7 @@ train_loader = data.DataLoader(dataset=train_dataset,
                                sampler = train_sampler,
                                pin_memory=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
-                               batch_size=val_batch_size,
+                               batch_size=batch_size,
                                num_workers=mp.cpu_count()//4,
                                sampler = valid_sampler,
                                pin_memory=True)
@@ -115,6 +117,7 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 #                                batch_size=batch_size,
 #                                num_workers=mp.cpu_count(),
 #                                pin_memory=True)
+
 # valid_loader = data.DataLoader(dataset=valid_dataset,
 #                                batch_size=val_batch_size,
 #                                num_workers=mp.cpu_count(),
@@ -127,23 +130,22 @@ criterion = CosineDistanceLoss()
 
 model = ULSTM(nlayers = 3, nefilters = 64,filter_size = 15,merge_filter_size = 5,hidden_size = 20, num_layers = 2)
 # model = Resv2Unet(5,64,15,5)
-
 model.cuda()
+
 optimizer = RAdam(model.parameters(), lr= learning_rate)
-
-# Horovod : broadcast parameters & optimizer state
-# hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-# hvd.broadcast_optimizer_state(optimizer, root_rank=0)
-
-# optimizer = hvd.DistributedOptimizer(optimizer,
-#                                       named_parameters=model.named_parameters())
-# #                                      compression = hvd.Compression.fp16)
 model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
-model = DDP(model,delay_allreduce=True)
+# model = DDP(model,delay_allreduce=True)
+# model = DDP(model)
 
-if verbose:
-    logging("[*] training ...")
+model = torch.nn.parallel.DistributedDataParallel(model,
+                                                  device_ids=[args.local_rank],
+                                                  output_device=args.local_rank)
+
+
+logging("[*] training ...")
+
+if verbose and not is_test:
     log = open(os.path.join(save_path,'log.csv'), 'w', encoding='utf-8', newline='')
     log_writer = csv.writer(log)
 
@@ -157,34 +159,33 @@ for epoch in range(n_epoch):
 #     optimizer.zero_grad()
     model.train()
     
-    for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=verbose==1)):
+    for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         optimizer.zero_grad()
-        x_train,y_train = _x.float().cuda(),_y.float().cuda()
+        x_train,y_train = _x.cuda(),_y.cuda()
         pred = model(x_train)
         loss = criterion(pred,y_train)
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
-#             optimizer.synchronize()
 #         loss.backward()
-#         with optimizer.skip_synchronize():
-#             optimizer.step()
         optimizer.step()
-        train_loss += loss.item() / len(train_loader)
+        reduced_loss = reduce_tensor(loss.data)
+        train_loss += reduced_loss.item() / len(train_loader)
     
+#     torch.cuda.synchronize()
     val_loss = 0.
     model.eval()
-    with torch.no_grad():
-        for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=verbose==1)):
-            x_val,y_val = _x.float().cuda(),_y.float().cuda()
+    for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=(verbose==0))):
+        x_val,y_val = _x.cuda(),_y.cuda()
+        with torch.no_grad():
             pred = model(x_val)
             loss = criterion(pred,y_val)
-            val_loss += loss.item()/len(valid_loader)
-
-    torch.cuda.synchronize()
+            reduced_loss = reduce_tensor(loss.data)
+        val_loss += reduced_loss.item()/len(valid_loader)
+            
     scheduler.step()
     
-    if verbose:
-        if val_loss < best_val and not is_test:
+    if verbose and not is_test:
+        if val_loss < best_val:
             torch.save(model.state_dict(), os.path.join(save_path,'best.pth'))
             best_val = val_loss
         log_writer.writerow([epoch,train_loss,val_loss])
@@ -192,6 +193,6 @@ for epoch in range(n_epoch):
     logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f duration : %.4f"%
         (epoch,n_epoch,train_loss,val_loss,time.time()-st))
     
-if verbose:
+if verbose and not is_test:
     log.close()
 logging("[!] training end")
