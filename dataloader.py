@@ -37,7 +37,7 @@ def load_datas(n_frame,window,step,top_db,is_test=False,local_rank = 0):
     print("load Train Data")
     args = []
     
-    for drt in ['./datasets/TrainData/Alexis/','./datasets/TrainData/vietnam/',
+    for drt in ['./datasets/TrainData/Alexis/','./datasets/TrainData/vietnam/','./datasets/TrainData/Childer/',
                 './datasets/TrainData/CMU/','./datasets/TrainData/saarbrucken/']:
         for file in os.listdir(drt):
             if 'wav' in file:

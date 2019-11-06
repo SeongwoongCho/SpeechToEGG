@@ -4,27 +4,36 @@ speech to egg transformation via deep neural network
 - +  : for add data
 - ++ : for swish activation function
 - +++ : augmentation을 바꿈.(X/normal/musical 중 하나 추가, white/brown/pink 중 하나 추가 하도록), pathology data 삭제
+- +++* : augmentation을 바꿈.(X/normal/musical 중 하나 추가, white/brown/pink 중 하나 추가 하도록)
 - * 숫자 : exp숫자 의 변형
-|Model Num|Model name            |Methodology                   |Validation Loss| Hyper Parameters                    |data_prep |
-|---------|----------------------|------------------------------|---------------|-------------------------------------|----------|
-|1        |Wave Unet 4,10        |Cosine Distance Loss          |0.244799       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? | 
-|2        |AAI                   |Cosine Distance Loss          |0.290648       |100,40000,192,2e-3,StepLr(10,0.9)    |1.4, 2.5 top_db = ? |
-|3        |Wave Unet 4,10        |MSE Loss                      |               |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? |
-|4        |Wave Unet 4,10        |Cosine Distance Loss(EGG+DEGG)|0.646573       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? |
-|5        |Wave Unet 4,10        |Cosine Distance Loss + Ranger |0.247205       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = 25|
-|6        |Resv2Unet 4,10,15,5   |Cosine Distance Loss + Ranger |0.193103       |70,16000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = 25|
-|7        |Resv2Unet 4,15,15,5   |Cosine Distance Loss + Ranger |0.161064       |110,11000,192,1e-2,StepLr(85,0.1)    |1.4, 2.5 top_db = 25|
-|8        |Resv2Unet 4,20,9,5    |Cosine Distance Loss + Ranger |0.145366       |90,8000,192,1e-2,StepLr(85,0.1)      |1.4, 2.5 top_db = 25|
-|9        |Resv2Unet+ 5,64,15,5  |Cosine Distance Loss + Ranger |0.131211       |100,9000,192,1e-2,StepLr(80,0.1)     |1.4, 2.5 top_db = 25|
-|10       |Resv2Unet+ 5,64,15,5  |finetune 9 with MSE + Ranger  |0.015437       |6,8000,192,4e-4                      |1.4, 2.5 top_db = 25|
-|11       |Resv2Unet+ 5,32,15,5  |Cosine Distance Loss + Ranger |0.144715       |70,14500,320,1e-2,StepLr(50,0.1)     |1.25, 4  top_db = 25|
-|12       |Resv2Unet+ 5,48,15,5  |Cosine Distance Loss + Ranger |0.117401       |90,13000,256,1e-2,StepLr(80,0.1)     |1.25, 4, top_db = 15|
-|13       |ULSTM 5,32,15,5,10,1,T|Cosine Distance Loss + Ranger |12보다 잘안됨  |80,10000,320,1e-2,StepLr(65,0.1)     |1.25, 4, top_db = 15|
-|14       |Resv2Unet++ 4,64,25,9 |Cosine Distance Loss + Ranger |왠지 모르겠는데 잘안됨|80,9600,256,1e-2,StepLr(70,0.1)|1.25, 4, top_db = 20|
-|15       |Resv2Unet+++ 5,64,15,5|Cosine Distance Loss + Ranger |0.098998       |95,8000,256,1e-2,StepLr(80,0.1)     |1.25, 4, top_db = 20|
-|16(* 9)  |ULSTM+++ 3,128,15,5,20,3|Cosine Distance Loss + Ranger |             |100,9000,256,1e-2,StepLr(80,0.1)     |1.4, 2.5 top_db = 20|
-
-
+|Model Num|Model name            |Methodology                       |Validation Loss| Hyper Parameters                    |data_prep           | 3 epoch|
+|---------|----------------------|----------------------------------|---------------|-------------------------------------|--------------------|--------|
+|1        |Wave Unet 4,10        |Cosine Distance Loss              |0.244799       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? |        |
+|2        |AAI                   |Cosine Distance Loss              |0.290648       |100,40000,192,2e-3,StepLr(10,0.9)    |1.4, 2.5 top_db = ? |        |
+|3        |Wave Unet 4,10        |MSE Loss                          |               |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? |        |
+|4        |Wave Unet 4,10        |Cosine Distance Loss(EGG+DEGG)    |0.646573       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = ? |        |
+|5        |Wave Unet 4,10        |Cosine Distance Loss + Ranger     |0.247205       |70,40000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = 25|        |
+|6        |Resv2Unet 4,10,15,5   |Cosine Distance Loss + Ranger     |0.193103       |70,16000,192,1e-2,StepLr(50,0.1)     |1.4, 2.5 top_db = 25|        |
+|7        |Resv2Unet 4,15,15,5   |Cosine Distance Loss + Ranger     |0.161064       |110,11000,192,1e-2,StepLr(85,0.1)    |1.4, 2.5 top_db = 25|        |
+|8        |Resv2Unet 4,20,9,5    |Cosine Distance Loss + Ranger     |0.145366       |90,8000,192,1e-2,StepLr(85,0.1)      |1.4, 2.5 top_db = 25|        |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|9        |Resv2Unet+ 5,64,15,5  |Cosine Distance Loss + Ranger     |0.131211       |100,9000,192,1e-2,StepLr(80,0.1)     |1.4, 2.5 top_db = 25|        |
+|10       |Resv2Unet+ 5,64,15,5  |finetune 9 with MSE + Ranger      |0.015437       |6,8000,192,4e-4                      |1.4, 2.5 top_db = 25|        |
+|11       |Resv2Unet+ 5,32,15,5  |Cosine Distance Loss + Ranger     |0.144715       |70,14500,320,1e-2,StepLr(50,0.1)     |1.25, 4  top_db = 25|        |
+|12       |Resv2Unet+ 5,48,15,5  |Cosine Distance Loss + Ranger     |0.117401       |90,13000,256,1e-2,StepLr(80,0.1)     |1.25, 4, top_db = 15|        |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|13       |ULSTM+ 5,32,15,5,10,1,T|Cosine Distance Loss + Ranger    |구현 잘못했었따|80,10000,320,1e-2,StepLr(65,0.1)     |1.25, 4, top_db = 15|        |
+|14       |Resv2Unet++ 4,64,25,9 |Cosine Distance Loss + Ranger     |구현 잘못했었따|80,9600,256,1e-2,StepLr(70,0.1)      |1.25, 4, top_db = 20|        |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|15       |Resv2Unet+++ 5,64,15,5|Cosine Distance Loss + Ranger     |0.098998       |95,8000,256,1e-2,StepLr(80,0.1)      |1.25, 4, top_db = 20|0.2126  |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|16       |UEDSimple+++* 3,64,15,5,512,2   |CDL + Radam + grad clipping|0.185020       |150,512\*4,256,3e-4,StepLr(125,0.1)  |1.25, 4. top_db = 20|0.4028  |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|17       |ULSTM+++*     5,64,15,5,128,2   |CDL + Radam + grad clipping|너무 오래 걸린다|100,1500\*4,256,3e-4,StepLr(80,0.1)  |1.25, 4. top_db = 20|0.2636  |
+|18       |UEDAttention+++* 5,64,15,5,128,1|CDL + Radam + grad clipping|너무 오래 걸린다|100,1792\*4,256,3e-4,StepLr(80,0.1)  |1.25, 4. top_db = 20|        |
+|19       |Resv2Unet+++* 5,64,15,5     |CDL + Radam             |                 |100,1792\*4,256,3e-4,StepLr(80,0.1)  |1.25, 4. top_db = 20|        |
+|#########|######################|##################################|###############|#####################################|####################|########|
+|20       |Finetuning 19 with CMU|
 # Test Results
 
 conf 1. smooth = 49 (exp 1,2,3,4)  --> top db 10, step 64, find_peaks_cwt

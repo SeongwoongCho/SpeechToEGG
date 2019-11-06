@@ -1,5 +1,5 @@
 import torch
-import encoding ## pip install torch-encoding . For synchnonized Batch norm in pytorch 1.0.0
+# import encoding ## pip install torch-encoding . For synchnonized Batch norm in pytorch 1.0.0
 import torch.nn as nn
 import numpy as np
 from torch.nn import functional as F
@@ -114,7 +114,7 @@ class SEBasicBlock(nn.Module):
         return x + residual
       
 class Resv2Unet(nn.Module):
-    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,act = 'relu'):
+    def __init__(self, nlayers = 14,nefilters=24,filter_size = 9,merge_filter_size = 5,act = 'swish',extract = False):
         super(Resv2Unet, self).__init__()
 
         self.num_layers = nlayers
@@ -122,6 +122,7 @@ class Resv2Unet(nn.Module):
         
         self.encoder = nn.ModuleList()
         self.decoder = nn.ModuleList()
+        self.extract = extract
         echannelin = [nefilters] + [(i + 1) * nefilters for i in range(nlayers - 1)]
         echannelout = [(i + 1) * nefilters for i in range(nlayers)]
         dchannelout = echannelout[::-1]
@@ -132,14 +133,16 @@ class Resv2Unet(nn.Module):
         
         self.first = nn.Conv1d(1,nefilters,filter_size,padding=filter_size//2)
         self.middle = SEBasicBlock(echannelout[-1],echannelout[-1],filter_size)
-        self.outbatch = encoding.nn.BatchNorm1d(nefilters+1)
-#         self.outbatch = nn.BatchNorm1d(nefilters+1)
-        self.out = nn.Sequential(
-            nn.Conv1d(nefilters + 1, 1, 1),
-            nn.Tanh()
-        )
+#         self.outbatch = encoding.nn.BatchNorm1d(nefilters+1)
+        self.outbatch = nn.BatchNorm1d(nefilters+1)
         
-    def forward(self,x,extract = False):
+        if not extract:
+            self.out = nn.Sequential(
+                nn.Conv1d(nefilters + 1, 1, 1),
+                nn.Tanh()
+            )
+        
+    def forward(self,x):
         encoder = list()
         
         x = x.squeeze(-1).unsqueeze(1) ## bs,1,n_frame
@@ -157,25 +160,67 @@ class Resv2Unet(nn.Module):
             x = torch.cat([x,encoder[self.num_layers - i - 1]],dim=1)
             x = self.decoder[i](x)
         x = torch.cat([x,input],dim=1)
+        
         x = self.outbatch(x)
-        if extract:
+        x = F.leaky_relu(x)
+        if self.extract:
             return x.transpose(1,2)  ## bs,n_frame,nefilters+1
         
-        x = F.leaky_relu(x)
         x = self.out(x)
         return x.squeeze(1).unsqueeze(-1)
 
 
+class UEDSimple(nn.Module): ## Unet Encoder Decoder Simple
+    def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1):
+        super(UEDSimple, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        
+        self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
+
+        self.encoder = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.decoder = nn.GRU(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.out = nn.Sequential(
+            nn.Linear(hidden_size,1),
+            nn.Tanh()
+        )
+        
+    def forward(self,x):
+        """
+        x : B,1,T
+        inputs : B,T,nefilters+1
+        """
+        
+        inputs = self.UBlock(x)
+        T = inputs.shape[1]
+
+#         output, (hidden,cell) = self.encoder(inputs)
+        output, hidden = self.encoder(inputs)
+        ## output : B,T,hidden_size
+        
+        outputs = []
+        for t in range(T):
+#             output,(hidden,cell) = self.decoder(output[:,-1:,:],(hidden,cell))
+            output,hidden = self.decoder(output[:,-1:,:],hidden)
+            
+            ## output : B,1,hidden_size
+            outputs.append(output)
+        outputs = torch.stack(outputs) #T,B,1,H
+        outputs = outputs.squeeze(2).transpose(0,1)
+        # Many-to-Many
+        outputs = self.out(outputs) # B,T,H -> B,T,1
+
+        return outputs
+    
 class ULSTM(nn.Module):
     def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1):
         super(ULSTM, self).__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
         
-        self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish')
+        self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
 
-        self.encoder = nn.LSTM(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
-        self.decoder = nn.LSTM(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.gru = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
         self.out = nn.Sequential(
             nn.Linear(hidden_size,1),
             nn.Tanh()
@@ -186,16 +231,64 @@ class ULSTM(nn.Module):
         inputs : B,T,nefilters+1
         """
         
-        inputs = self.UBlock(x,extract=True)
-        T = inputs.shape[1]
-
-        output, (hidden,cell) = self.encoder(inputs)
+        inputs = self.UBlock(x)
+        output, hidden = self.gru(inputs)
         ## output : B,T,hidden_size
+        output = self.out(output) # B,T,H -> B,T,1
+
+        return output
+    
+class UEDAttention(nn.Module):
+    def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1):
+        super(UEDAttention, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.num_directions = 1
+        self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
+
+        self.encoder = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.decoder = nn.GRU(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
+        self.attn = nn.Linear(2*hidden_size,hidden_size)
+        self.out = nn.Sequential(
+            nn.Linear(hidden_size,1),
+            nn.Tanh()
+        )
+    
+    def init_token(self,batch_size):
+        z = np.zeros((batch_size,1,self.hidden_size))
+        z[:,:,0] = 1
+        return torch.Tensor(z).cuda()
+        
+    def forward(self,x):
+        """
+        x : B,1,T
+        inputs : B,T,nefilters+1
+        """
+        inputs = self.UBlock(x)
+        
+        B = inputs.shape[0]
+        T = inputs.shape[1]
+        n_hidden = self.num_directions*self.hidden_size*self.num_layers
+        
+        hiddens = []
+        for i in range(T):
+            if i ==0:
+                output, hidden = self.encoder(inputs[:,i:i+1,:])
+            else:
+                output, hidden = self.encoder(inputs[:,i:i+1,:],hidden)
+            hiddens.append(hidden)
+        hiddens = torch.stack(hiddens).transpose(0,2).transpose(1,2).contiguous() ## T,N*ND,B,H -> B,T,N*ND,H
         
         outputs = []
+        output = self.init_token(B) ## B,1,H
         for t in range(T):
-            output,(hidden,cell) = self.decoder(output[:,-1:,:],(hidden,cell))
-            ## output : B,1,hidden_size
+            attn_weights = torch.bmm(hiddens.view(B,T,n_hidden),hidden.transpose(0,1).contiguous().view(B,n_hidden,1))
+            attn_weights = F.softmax(attn_weights,dim=1) ## B,T,1
+            context = attn_weights.unsqueeze(-1)*hiddens ## B,T,N*ND,H
+            context = torch.sum(context,dim=1).transpose(0,1) ## N*ND,B,H
+            
+            hidden = self.attn(torch.cat([context,hidden],dim=-1)) ## N*ND,B,2H -> N*ND,B,H
+            output,hidden = self.decoder(output[:,-1:,:],hidden)
             outputs.append(output)
         outputs = torch.stack(outputs) #T,B,1,H
         outputs = outputs.squeeze(2).transpose(0,1)
