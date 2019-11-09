@@ -220,9 +220,9 @@ class ULSTM(nn.Module):
         
         self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
 
-        self.gru = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
-        self.out = nn.Sequential(
-            nn.Linear(hidden_size,1),
+        self.gru = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=True)
+        self.rnn_out = nn.Sequential(
+            nn.Linear(2*hidden_size,1),
             nn.Tanh()
         )
     def forward(self,x):
@@ -232,9 +232,10 @@ class ULSTM(nn.Module):
         """
         
         inputs = self.UBlock(x)
+        self.gru.flatten_parameters()
         output, hidden = self.gru(inputs)
         ## output : B,T,hidden_size
-        output = self.out(output) # B,T,H -> B,T,1
+        output = self.rnn_out(output) # B,T,H -> B,T,1
 
         return output
     
@@ -249,7 +250,7 @@ class UEDAttention(nn.Module):
         self.encoder = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
         self.decoder = nn.GRU(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
         self.attn = nn.Linear(2*hidden_size,hidden_size)
-        self.out = nn.Sequential(
+        self.att_out = nn.Sequential(
             nn.Linear(hidden_size,1),
             nn.Tanh()
         )
@@ -271,7 +272,9 @@ class UEDAttention(nn.Module):
         n_hidden = self.num_directions*self.hidden_size*self.num_layers
         
         hiddens = []
+        
         for i in range(T):
+            self.encoder.flatten_parameters()
             if i ==0:
                 output, hidden = self.encoder(inputs[:,i:i+1,:])
             else:
@@ -281,6 +284,7 @@ class UEDAttention(nn.Module):
         
         outputs = []
         output = self.init_token(B) ## B,1,H
+        
         for t in range(T):
             attn_weights = torch.bmm(hiddens.view(B,T,n_hidden),hidden.transpose(0,1).contiguous().view(B,n_hidden,1))
             attn_weights = F.softmax(attn_weights,dim=1) ## B,T,1
@@ -288,11 +292,12 @@ class UEDAttention(nn.Module):
             context = torch.sum(context,dim=1).transpose(0,1) ## N*ND,B,H
             
             hidden = self.attn(torch.cat([context,hidden],dim=-1)) ## N*ND,B,2H -> N*ND,B,H
+            self.decoder.flatten_parameters()
             output,hidden = self.decoder(output[:,-1:,:],hidden)
             outputs.append(output)
         outputs = torch.stack(outputs) #T,B,1,H
         outputs = outputs.squeeze(2).transpose(0,1)
         # Many-to-Many
-        outputs = self.out(outputs) # B,T,H -> B,T,1
+        outputs = self.att_out(outputs) # B,T,H -> B,T,1
 
         return outputs
