@@ -129,14 +129,14 @@ logging("[!] load data end")
 
 criterion = CosineDistanceLoss()
 
-# model = UEDAttention(nlayers = 5, nefilters = 64,filter_size = 15,merge_filter_size = 5,hidden_size = 128, num_layers = 1)
+model = UEDAttention(nlayers = 5, nefilters = 64,filter_size = 15,merge_filter_size = 5,hidden_size = 30, num_layers = 1)
 # model = ULSTM(nlayers = 5, nefilters = 64,filter_size = 15,merge_filter_size = 5,hidden_size = 128, num_layers = 1)
-model = Resv2Unet(5,64,15,5)
+# model = Resv2Unet(5,64,15,5)
 if mode == 'ddp':
     model = apex.parallel.convert_syncbn_model(model)
 
 ## pretrained model
-pretrained_state_dict = torch.load('./models/exp19/best.pth')
+pretrained_state_dict = torch.load('./models/exp19_continue/best.pth')
 model_state_dict = model.state_dict()
 
 # print(pretrained_state_dict.keys())
@@ -164,7 +164,8 @@ scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
 if mode == 'ddp':
     model = torch.nn.parallel.DistributedDataParallel(model,
                                                       device_ids=[args.local_rank],
-                                                      output_device=args.local_rank)
+                                                      output_device=0)
+#     model = torch.nn.parallel.DistributedDataParallel(model)
 else:
     model = torch.nn.DataParallel(model)
 
@@ -175,14 +176,14 @@ if verbose and not is_test:
     log_writer = csv.writer(log)
     best_val = np.inf
 
-# for param in model.module.UBlock.parameters():
-#     param.requires_grad = False    
+for param in model.module.UBlock.parameters():
+    param.requires_grad = False
     
 for epoch in range(n_epoch):
-#     if epoch == step_size or is_test:
-#         for param in model.module.UBlock.parameters():
-#             param.requires_grad = True
-        # learning rate를 decay시킬 때 CNN layer를 unfreeze 해준다.
+    if epoch == 5 or is_test:
+        for param in model.module.UBlock.parameters():
+            param.requires_grad = True
+#         learning rate를 decay시킬 때 CNN layer를 unfreeze 해준다.
             
     st = time.time()
     train_sampler.set_epoch(epoch)

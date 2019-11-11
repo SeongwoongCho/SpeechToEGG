@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.nn import functional as F
-
+from attention_model import EncoderRNN,Attn,BahdanauAttnDecoderRNN
 ######################################################
 ####################Trash Can ########################
 ######################################################
@@ -238,28 +238,25 @@ class ULSTM(nn.Module):
         output = self.rnn_out(output) # B,T,H -> B,T,1
 
         return output
-    
+
 class UEDAttention(nn.Module):
-    def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1):
+    def __init__(self,nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 64,num_layers = 1,dropout_e = 0.5, dropout_p = 0.1):
         super(UEDAttention, self).__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
         self.num_directions = 1
         self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
 
-        self.encoder = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
-        self.decoder = nn.GRU(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
-        self.attn = nn.Linear(2*hidden_size,hidden_size)
-        self.att_out = nn.Sequential(
-            nn.Linear(hidden_size,1),
+        self.encoder = EncoderRNN(nefilters+1,hidden_size,num_layers,dropout_e)
+        self.decoder = BahdanauAttnDecoderRNN(2*hidden_size,num_layers,dropout_p)
+        self.final_out = nn.Sequential(
+            nn.Linear(2*hidden_size,1),
             nn.Tanh()
         )
-    
-    def init_token(self,batch_size):
-        z = np.zeros((batch_size,1,self.hidden_size))
-        z[:,:,0] = 1
+    def get_go_frame(self,batch_size):
+        z = np.zeros((batch_size,1,2*self.hidden_size))
         return torch.Tensor(z).cuda()
-        
+    
     def forward(self,x):
         """
         x : B,1,T
@@ -269,35 +266,78 @@ class UEDAttention(nn.Module):
         
         B = inputs.shape[0]
         T = inputs.shape[1]
-        n_hidden = self.num_directions*self.hidden_size*self.num_layers
         
-        hiddens = []
-        
+        encoder_outputs,hidden = self.encoder(inputs) ##(B,T,2H), (2N,B,H)
+#         print("encoder hidden:",hidden.shape)
+        hidden = hidden.view(self.num_layers,B,-1) ## (N,B,2H)
+        decoder_outputs = []
+        decoder_input = self.get_go_frame(B)
         for i in range(T):
-            self.encoder.flatten_parameters()
-            if i ==0:
-                output, hidden = self.encoder(inputs[:,i:i+1,:])
-            else:
-                output, hidden = self.encoder(inputs[:,i:i+1,:],hidden)
-            hiddens.append(hidden)
-        hiddens = torch.stack(hiddens).transpose(0,2).transpose(1,2).contiguous() ## T,N*ND,B,H -> B,T,N*ND,H
-        
-        outputs = []
-        output = self.init_token(B) ## B,1,H
-        
-        for t in range(T):
-            attn_weights = torch.bmm(hiddens.view(B,T,n_hidden),hidden.transpose(0,1).contiguous().view(B,n_hidden,1))
-            attn_weights = F.softmax(attn_weights,dim=1) ## B,T,1
-            context = attn_weights.unsqueeze(-1)*hiddens ## B,T,N*ND,H
-            context = torch.sum(context,dim=1).transpose(0,1) ## N*ND,B,H
-            
-            hidden = self.attn(torch.cat([context,hidden],dim=-1)) ## N*ND,B,2H -> N*ND,B,H
-            self.decoder.flatten_parameters()
-            output,hidden = self.decoder(output[:,-1:,:],hidden)
-            outputs.append(output)
-        outputs = torch.stack(outputs) #T,B,1,H
-        outputs = outputs.squeeze(2).transpose(0,1)
+            decoder_input, hidden = self.decoder(decoder_input, hidden, encoder_outputs)
+            decoder_outputs.append(decoder_input)
+        decoder_outputs = torch.stack(decoder_outputs) #T,B,H
+        decoder_outputs = decoder_outputs.transpose(0,1)
         # Many-to-Many
-        outputs = self.att_out(outputs) # B,T,H -> B,T,1
+        decoder_outputs = self.final_out(decoder_outputs) # B,T,H -> B,T,1
+        return decoder_outputs
+            
+# class UEDAttention(nn.Module):
+#     def __init__(self, nlayers = 5,nefilters=32,filter_size = 15,merge_filter_size = 5,hidden_size = 10, num_layers = 1):
+#         super(UEDAttention, self).__init__()
+#         self.num_layers = num_layers
+#         self.hidden_size = hidden_size
+#         self.num_directions = 1
+#         self.UBlock = Resv2Unet(nlayers = nlayers,nefilters=nefilters,filter_size = filter_size,merge_filter_size = merge_filter_size,act='swish',extract = True)
 
-        return outputs
+#         self.encoder = nn.GRU(nefilters+1,hidden_size,num_layers,batch_first=True,bidirectional=False)
+#         self.decoder = nn.GRU(hidden_size,hidden_size,num_layers,batch_first=True,bidirectional=False)
+#         self.attn = nn.Linear(2*hidden_size,hidden_size)
+#         self.att_out = nn.Sequential(
+#             nn.Linear(hidden_size,1),
+#             nn.Tanh()
+#         )
+    
+#     def init_token(self,batch_size):
+#         z = np.zeros((batch_size,1,self.hidden_size))
+#         z[:,:,0] = 1
+#         return torch.Tensor(z).cuda()
+        
+#     def forward(self,x):
+#         """
+#         x : B,1,T
+#         inputs : B,T,nefilters+1
+#         """
+#         inputs = self.UBlock(x)
+        
+
+        
+#         hiddens = []
+        
+#         for i in range(T):
+#             self.encoder.flatten_parameters()
+#             if i ==0:
+#                 output, hidden = self.encoder(inputs[:,i:i+1,:])
+#             else:
+#                 output, hidden = self.encoder(inputs[:,i:i+1,:],hidden)
+#             hiddens.append(hidden)
+#         hiddens = torch.stack(hiddens).transpose(0,2).transpose(1,2).contiguous() ## T,N*ND,B,H -> B,T,N*ND,H
+        
+#         outputs = []
+#         output = self.init_token(B) ## B,1,H
+        
+#         for t in range(T):
+#             attn_weights = torch.bmm(hiddens.view(B,T,n_hidden),hidden.transpose(0,1).contiguous().view(B,n_hidden,1))
+#             attn_weights = F.softmax(attn_weights,dim=1) ## B,T,1
+#             context = attn_weights.unsqueeze(-1)*hiddens ## B,T,N*ND,H
+#             context = torch.sum(context,dim=1).transpose(0,1) ## N*ND,B,H
+            
+#             hidden = self.attn(torch.cat([context,hidden],dim=-1)) ## N*ND,B,2H -> N*ND,B,H
+#             self.decoder.flatten_parameters()
+#             output,hidden = self.decoder(output[:,-1:,:],hidden)
+#             outputs.append(output)
+#         outputs = torch.stack(outputs) #T,B,1,H
+#         outputs = outputs.squeeze(2).transpose(0,1)
+#         # Many-to-Many
+#         outputs = self.att_out(outputs) # B,T,H -> B,T,1
+
+#         return outputs
