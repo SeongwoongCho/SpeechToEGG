@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks_cwt,medfilt
-from utils import positions2onehot
 
 def detectgroundwaveletgci(EGG,peak_range=(7,15)):
     DEGG = np.gradient(EGG,edge_order=2)
