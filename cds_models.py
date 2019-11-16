@@ -152,7 +152,9 @@ class MMDenseNet(nn.Module):
         self.out = nn.Sequential(
             _DenseBlock( 
                 2, last_channel, bn_size, 4, drop_rate),
-            nn.Conv2d(last_channel+8,2,1)
+            nn.ReLU(),
+            nn.Conv2d(last_channel+8,2,1),
+            nn.Tanh()
         )
         
     def forward(self,input):
@@ -164,6 +166,6 @@ class MMDenseNet(nn.Module):
         output = torch.cat([self.lowNet(low_input),self.highNet(high_input)],2)##Frequency 방향
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
-        output = self.out(output)
+        output = 50*self.out(output)
         
         return output
