@@ -105,15 +105,15 @@ def loudness_normalize(audio, criterion = 0.1):
 
 def stft_with_phase(audio,n_fft,hop_length,mode = 'concat'):
     stft = librosa.core.stft(np.asfortranarray(audio),n_fft = n_fft,hop_length = hop_length)
-    amp = stft.real #[F,T]
-    phase = stft.imag # [F,T]
-    amp = amp[np.newaxis,:,:] # [1,F,T]
+    mag = np.log10(1+np.abs(stft)) # [F,T] 
+    phase = np.angle(stft)/np.pi # [F,T] + normalize with PI 
+    mag = mag[np.newaxis,:,:] # [1,F,T]
     phase = phase[np.newaxis,:,:]# [1,F,T]
     
     if mode == 'concat':
-        embedding = np.concatenate([amp,phase],axis=1)
+        embedding = np.concatenate([mag,phase],axis=1)
     if mode == 'channel':
-        embedding = np.concatenate([amp,phase],axis=0)
+        embedding = np.concatenate([mag,phase],axis=0)
     return embedding
 
 def reduce_tensor(tensor):
@@ -122,9 +122,9 @@ def reduce_tensor(tensor):
     rt /= 4
     return rt
 
-def istft(X,hop_length,n_fft):
-    stft = X[0] + 1j * X[1]## 2,F,T-> F,T
-    return librosa.core.istft(stft, hop_length=hop_length, win_length=n_fft)
+def istft(X,hop_length,n_fft,length):
+    stft = X[0]*(np.cos(X[1])+1j*np.sin(X[1]))## 2,F,T-> F,T
+    return librosa.core.istft(stft, hop_length=hop_length, win_length=n_fft,length=length)
 
 #TODO
 def _get_CQSQ(arg):
@@ -139,13 +139,20 @@ def _get_CQSQ(arg):
         CQ_true,SQ_true = get_CQSQ(_egg_true,_degg_true)
         return (CQ_pred-CQ_true)**2,(SQ_pred-SQ_true)**2
     
-def metric(stft_pred,stft_target,hop_length,n_fft,pool=None):
+def metric(stft_pred,stft_target,hop_length,n_fft,length,pool=None):
     """
     stft_pred : B,2,F,T ndarray
     stft_target : B,2,F,T ndarray
     return CQ_difference,SQ_difference values
     """
-    B = stft_pred.shape[0]
+    B = stft_pred.shape[0]    
+    
+    stft_pred[:,0,:,:]=np.power(10,stft_pred[:,0,:,:])-1
+    stft_pred[:,1,:,:]=stft_pred[:,1,:,:]*np.pi
+    
+    stft_target[:,0,:,:]=np.power(10,stft_target[:,0,:,:])-1
+    stft_target[:,1,:,:]=stft_target[:,1,:,:]*np.pi
+    
     CQ_diff,SQ_diff = [],[]
     if pool is not None:
         args = []
@@ -158,8 +165,8 @@ def metric(stft_pred,stft_target,hop_length,n_fft,pool=None):
             SQ_diff.append(y)
     else:
         for i in range(B):
-            _egg_pred = istft(stft_pred[i],hop_length,n_fft)
-            _egg_true = istft(stft_target[i],hop_length,n_fft)
+            _egg_pred = istft(stft_pred[i],hop_length,n_fft,length)
+            _egg_true = istft(stft_target[i],hop_length,n_fft,length)
             _egg_pred = smooth(_egg_pred, 25)
             _degg_pred = np.gradient(_egg_pred,edge_order = 2)
             _degg_true = np.gradient(_egg_true,edge_order = 2)
@@ -195,14 +202,16 @@ def SC_loss(stft_magnitude_pred,stft_magnitude_target):
     
     return SC_loss : constant
     """
-    epsilon = 1e-2
+    epsilon = 1e-4
     numerator = frobenius_norm(stft_magnitude_pred-stft_magnitude_target)
     denominator = frobenius_norm(stft_magnitude_target) + epsilon
     loss = torch.mean(numerator/denominator)
-
-## issue : denominator가 너무 작아서 or numerator가 너무 커서 loss가 급격히 커진다. 
-
-#     if loss.item()>1000:
+#     print(numerator)
+#     print(denominator)
+#     print(loss)
+    
+    ## issue 없음
+#     if loss.item()>10:
 #         print(numerator)
 #         print(denominator)
 #         print("SC:",loss.item())
@@ -220,9 +229,15 @@ def LM_loss(stft_magnitude_pred,stft_magnitude_target):
     return LM_loss : constant
     """
     epsilon = 1e-4
-    loss = torch.mean(torch.abs(torch.log(stft_magnitude_pred+epsilon) - torch.log(stft_magnitude_target + epsilon)),dim=(0,1,2))
+#     print(stft_magnitude_pred.min())
+    loss = torch.abs(torch.log(stft_magnitude_pred+epsilon) - torch.log(stft_magnitude_target + epsilon))
+#     print(loss.max())
+    loss = torch.mean(loss,dim=(0,1,2))
+#     print(loss)
     
-#     if loss.item()>1000:
+    ## issue없음
+    
+#     if loss.item()>10:
 #         print(stft_magnitude_pred)
 #         print(stft_magnitude_target)
 #         print("LM:",loss.item())
@@ -240,9 +255,12 @@ def IF_loss(stft_phase_pred,stft_phase_target):
     """
     phase_difference_pred = stft_phase_pred[:,:,1:] - stft_phase_pred[:,:,:-1]
     phase_difference_target = stft_phase_target[:,:,1:] - stft_phase_target[:,:,:-1]
-    loss = torch.mean(torch.abs(phase_difference_pred - phase_difference_target), dim=(0,1,2))
-#     if loss.item()>1000:
+    loss = torch.abs(phase_difference_pred - phase_difference_target)
+    loss = torch.mean(loss, dim=(0,1,2))
+    #     if loss.item()>10:
 #         print("IF:",loss.item())
+    
+    ## issue없음
     
     return loss
     
@@ -274,12 +292,28 @@ def WP_loss(stft_pred,stft_target):
 
 def spectral_loss(coeff = [1,5,5,1]):
     def _spectral_loss(stft_pred,stft_target,coeff=coeff):
-        stft_magnitude_pred = torch.sqrt(stft_pred[:,0,:,:]**2 + stft_pred[:,1,:,:]**2)
-        stft_magnitude_target = torch.sqrt(stft_target[:,0,:,:]**2 + stft_target[:,1,:,:]**2)
+        stft_magnitude_pred = stft_pred[:,0,:,:]
+        stft_magnitude_target = stft_target[:,0,:,:]
+        stft_phase_pred = stft_pred[:,1,:,:]
+        stft_phase_target = stft_target[:,1,:,:]
 
+        coeff = coeff[:3]
         coeff = coeff/np.sum(coeff)
-
-        loss= coeff[0]*SC_loss(stft_magnitude_pred,stft_magnitude_target)+ coeff[1]*LM_loss(stft_magnitude_pred,stft_magnitude_target)+ coeff[2]*IF_loss(stft_pred[:,1,:,:],stft_target[:,1,:,:])+ coeff[3]*WP_loss(stft_pred,stft_target)
+        
+        sc_loss = SC_loss(stft_magnitude_pred,stft_magnitude_target)
+        lm_loss = LM_loss(stft_magnitude_pred,stft_magnitude_target)
+        if_loss = IF_loss(stft_phase_pred,stft_phase_target)
+        loss= coeff[0]*sc_loss+coeff[1]*lm_loss+coeff[2]*if_loss
+        
+#         print(loss)
+        
+#         if loss > 10:
+#             print(sc_loss)
+#             print(lm_loss)
+#             print(if_loss)
+        
+#         print(loss)
+#         coeff[3]*WP_loss(stft_pred,stft_target)
         return loss
     return _spectral_loss
 

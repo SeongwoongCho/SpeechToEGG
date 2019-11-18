@@ -74,10 +74,10 @@ def load_datas_path(n_frame,is_test = False):
             Val_y.append(ValidPath_y + file)
     
     if is_test:
-        Train_x = Train_x[:300]
-        Train_y = Train_y[:300]
-        Val_x = Val_x[:300]
-        Val_y = Val_y[:300]
+        Train_x = Train_x[:1000]
+        Train_y = Train_y[:1000]
+        Val_x = Val_x[:1000]
+        Val_y = Val_y[:1000]
     return Train_x,Train_y,Val_x,Val_y
 
 def load_noise(n_frame,is_test=False):
@@ -120,6 +120,6 @@ class Dataset(torch.utils.data.Dataset):
         Y = loudness_normalize(Y).astype('float32')
         if self.aug:
             X = self.aug(X,self.normal_noise,self.musical_noise)
-#         X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
-#         Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
+        X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
+        Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
         return X,Y

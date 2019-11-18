@@ -154,18 +154,20 @@ class MMDenseNet(nn.Module):
                 2, last_channel, bn_size, 4, drop_rate),
             nn.ReLU(),
             nn.Conv2d(last_channel+8,2,1),
-            nn.Tanh()
         )
         
     def forward(self,input):
 #         print(input.shape)
-        B,C,F,T = input.shape
-        low_input = input[:,:,:F//2,:]
-        high_input = input[:,:,F//2:,:]
+        B,C,Fre,T = input.shape
+        low_input = input[:,:,:Fre//2,:]
+        high_input = input[:,:,Fre//2:,:]
         
         output = torch.cat([self.lowNet(low_input),self.highNet(high_input)],2)##Frequency 방향
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
-        output = 50*self.out(output)
+        output = self.out(output)
+        output_mag = F.relu(output[:,0,:,:]).unsqueeze(1)
+        output_phase = F.tanh(output[:,1,:,:]).unsqueeze(1)
+        output = torch.cat([output_mag,output_phase],1)
         
         return output

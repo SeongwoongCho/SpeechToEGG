@@ -114,8 +114,8 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
-# criterion = nn.MSELoss(reduction='mean')
-criterion = spectral_loss(coeff = [0,1,1,0])
+MSE_criterion = nn.MSELoss(reduction='mean')
+criterion = spectral_loss(coeff = [1,6,5,0])
 model = MMDenseNet(drop_rate=0.2,bn_size=4,k=12,l=3)
 if mode == 'ddp':
     model = apex.parallel.convert_syncbn_model(model)
@@ -140,7 +140,7 @@ if verbose and not is_test:
     log_writer = csv.writer(log)
     best_val = np.inf
     best_metric = np.inf
-stft = STFT(filter_length = n_fft, hop_length = hop_length,window='hann').cuda()
+# stft = STFT(filter_length = n_fft, hop_length = hop_length,window='hann').cuda()
 pool = mp.Pool(mp.cpu_count()//4 if mode == 'ddp' else mp.cpu_count())
 
 if start_epoch >0:
@@ -159,19 +159,22 @@ for epoch in range(start_epoch,n_epoch):
     for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         optimizer.zero_grad()
         x_train,y_train = _x.cuda(),_y.cuda()
-        x_train_magnitude,x_train_phase = stft.transform(x_train)
-        x_train = torch.cat([x_train_magnitude.unsqueeze(1),x_train_phase.unsqueeze(1)],dim=1)
-        y_train_magnitude,y_train_phase = stft.transform(y_train)
-        y_train = torch.cat([y_train_magnitude.unsqueeze(1),y_train_phase.unsqueeze(1)],dim=1)
+#         x_train_magnitude,x_train_phase = stft.transform(x_train)
+#         x_train = torch.cat([x_train_magnitude.unsqueeze(1),x_train_phase.unsqueeze(1)],dim=1)
+#         y_train_magnitude,y_train_phase = stft.transform(y_train)
+#         y_train = torch.cat([y_train_magnitude.unsqueeze(1),y_train_phase.unsqueeze(1)],dim=1)
         
         pred = model(x_train)
         loss = criterion(pred,y_train)
         
+#         loss = MSE_criterion(pred,y_train)
+#         loss = spec_loss*0.5 +mse_loss*0.5
 #         if loss.item()>100:
 #             print(loss.item())
         
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
+#         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 5)
         optimizer.step()
         
         if mode == 'ddp':
@@ -196,15 +199,16 @@ for epoch in range(start_epoch,n_epoch):
     model.eval()
     for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=(verbose==0))):
         x_val,y_val = _x.cuda(),_y.cuda()
-        x_val_magnitude,x_val_phase = stft.transform(x_val)
-        x_val = torch.cat([x_val_magnitude.unsqueeze(1),x_val_phase.unsqueeze(1)],dim=1)
-        y_val_magnitude,y_val_phase = stft.transform(y_val)
-        y_val = torch.cat([y_val_magnitude.unsqueeze(1),y_val_phase.unsqueeze(1)],dim=1)
+#         x_val_magnitude,x_val_phase = stft.transform(x_val)
+#         x_val = torch.cat([x_val_magnitude.unsqueeze(1),x_val_phase.unsqueeze(1)],dim=1)
+#         y_val_magnitude,y_val_phase = stft.transform(y_val)
+#         y_val = torch.cat([y_val_magnitude.unsqueeze(1),y_val_phase.unsqueeze(1)],dim=1)
         
         with torch.no_grad():
             pred = model(x_val)
             loss = criterion(pred,y_val)
-        
+#             loss = MSE_criterion(pred,y_val)
+#             loss = spec_loss*0.5 +mse_loss*0.5
         if mode == 'ddp':
             reduced_loss = reduce_tensor(loss.data)
             val_loss += reduced_loss.item()/len(valid_loader)
@@ -214,23 +218,31 @@ for epoch in range(start_epoch,n_epoch):
         pred = pred.cpu().detach().numpy()
         y_val = y_val.cpu().detach().numpy()
         
-        CQ_diff_avg,SQ_diff_avg,CQ_diff_std,SQ_diff_std = metric(pred,y_val,hop_length,n_fft,pool = pool)
-        if mode == 'ddp':
-            CQ_diff_avg = reduce_tensor(torch.Tensor([CQ_diff_avg]).cuda())
-            CQ_diff_std = reduce_tensor(torch.Tensor([CQ_diff_std]).cuda())
-            SQ_diff_avg = reduce_tensor(torch.Tensor([SQ_diff_avg]).cuda())
-            SQ_diff_std = reduce_tensor(torch.Tensor([SQ_diff_std]).cuda())
-        valid_CQ_diff_avg += CQ_diff_avg.item()/len(valid_loader)
-        valid_SQ_diff_avg += SQ_diff_avg.item()/len(valid_loader)
-        valid_CQ_diff_std += CQ_diff_std.item()/len(valid_loader)
-        valid_SQ_diff_std += SQ_diff_std.item()/len(valid_loader)
-        
+        if epoch%4 ==0:
+            CQ_diff_avg,SQ_diff_avg,CQ_diff_std,SQ_diff_std = metric(pred,y_val,hop_length,n_fft,n_frame,pool = None)
+            if mode == 'ddp':
+                CQ_diff_avg = reduce_tensor(torch.Tensor([CQ_diff_avg]).cuda())
+                CQ_diff_std = reduce_tensor(torch.Tensor([CQ_diff_std]).cuda())
+                SQ_diff_avg = reduce_tensor(torch.Tensor([SQ_diff_avg]).cuda())
+                SQ_diff_std = reduce_tensor(torch.Tensor([SQ_diff_std]).cuda())
+            valid_CQ_diff_avg += CQ_diff_avg.item()/len(valid_loader)
+            valid_SQ_diff_avg += SQ_diff_avg.item()/len(valid_loader)
+            valid_CQ_diff_std += CQ_diff_std.item()/len(valid_loader)
+            valid_SQ_diff_std += SQ_diff_std.item()/len(valid_loader)
+        else:
+            valid_CQ_diff_avg = 1000
+            valid_SQ_diff_avg = 1000
+            valid_CQ_diff_std = 1000
+            valid_SQ_diff_std = 1000 
     val_metric = valid_CQ_diff_avg + valid_SQ_diff_avg
         
     if verbose and not is_test:
-        if val_metric < best_metric:
+#         if val_metric < best_metric:
+#             torch.save(model.state_dict(), os.path.join(save_path,'best.pth'))
+#             best_metric = val_metric
+        if val_loss < best_val:
             torch.save(model.state_dict(), os.path.join(save_path,'best.pth'))
-            best_metric = val_metric
+            best_val = val_loss
         log_writer.writerow([epoch,train_loss,val_loss,valid_CQ_diff_avg,valid_CQ_diff_std,valid_SQ_diff_avg,valid_SQ_diff_std])
         log.flush()
     logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f valid_CQ_diff_avg %.6f valid_CQ_diff_std %.6f valid_SQ_diff_avg %.6fvalid_SQ_diff_std %.6f duration : %.4f"%
