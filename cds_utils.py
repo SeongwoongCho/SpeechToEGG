@@ -230,7 +230,7 @@ def LM_loss(stft_magnitude_pred,stft_magnitude_target):
     """
     epsilon = 1e-4
 #     print(stft_magnitude_pred.min())
-    loss = torch.abs(torch.log(stft_magnitude_pred+epsilon) - torch.log(stft_magnitude_target + epsilon))
+    loss = torch.abs(stft_magnitude_pred-stft_magnitude_target) ## log 값이 씌어져 있는 상태임
 #     print(loss.max())
     loss = torch.mean(loss,dim=(0,1,2))
 #     print(loss)
@@ -300,10 +300,14 @@ def spectral_loss(coeff = [1,5,5,1]):
         coeff = coeff[:3]
         coeff = coeff/np.sum(coeff)
         
-        sc_loss = SC_loss(stft_magnitude_pred,stft_magnitude_target)
+#         sc_loss = SC_loss(stft_magnitude_pred,stft_magnitude_target)
         lm_loss = LM_loss(stft_magnitude_pred,stft_magnitude_target)
         if_loss = IF_loss(stft_phase_pred,stft_phase_target)
-        loss= coeff[0]*sc_loss+coeff[1]*lm_loss+coeff[2]*if_loss
+#         loss= coeff[0]*sc_loss+coeff[1]*lm_loss+coeff[2]*if_loss
+        loss = coeff[1]*lm_loss+coeff[2]*if_loss
+#         print("sc:",sc_loss)
+#         print("lm:",lm_loss)
+#         print("if:",if_loss)
         
 #         print(loss)
         

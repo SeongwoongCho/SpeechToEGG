@@ -114,7 +114,7 @@ class _MDenseNet_STEM(nn.Module):
         if x.shape != target.shape:
             padding_1 = target.shape[2] - x.shape[2]
             padding_2 = target.shape[3] - x.shape[3]
-        return F.pad(x,(padding_2,0,padding_1,0),'replicate')
+        return F.pad(x,(padding_2//2,padding_2 - padding_2//2,padding_1//2,padding_1-padding_1//2),'constant', 0)
     
     def forward(self,input):
         ## stem
@@ -141,9 +141,9 @@ class MMDenseNet(nn.Module):
     def __init__(self,drop_rate = 0.1,bn_size=4,k=10,l=3):
         super(MMDenseNet,self).__init__()
         
-        kl_low = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)]
-        kl_high = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)]
-        kl_full = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)]
+        kl_low = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)] ## (14,4)
+        kl_high = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)] ## (10,3)
+        kl_full = [(k,l),(k,l),(k,l),(k,l),(k,l),(k,l),(k,l)] ## (6,2)
         self.lowNet = _MDenseNet_STEM(first_channel=32,first_kernel = (4,3),scale=3,kl = kl_low,drop_rate = drop_rate,bn_size=bn_size)
         self.highNet = _MDenseNet_STEM(first_channel=32,first_kernel = (3,3),scale=3,kl = kl_high,drop_rate = drop_rate,bn_size=bn_size)
         self.fullNet = _MDenseNet_STEM(first_channel=32,first_kernel = (4,3),scale=3,kl = kl_full,drop_rate = drop_rate,bn_size=bn_size)

@@ -115,7 +115,7 @@ logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
 MSE_criterion = nn.MSELoss(reduction='mean')
-criterion = spectral_loss(coeff = [1,6,5,0])
+criterion = spectral_loss(coeff = [0,1,1,0])
 model = MMDenseNet(drop_rate=0.2,bn_size=4,k=12,l=3)
 if mode == 'ddp':
     model = apex.parallel.convert_syncbn_model(model)
