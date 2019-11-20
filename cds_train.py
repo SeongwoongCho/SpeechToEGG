@@ -11,7 +11,7 @@ from torch import nn
 from torch.utils import data
 from torch.optim.lr_scheduler import StepLR
 from torch.nn import functional as F
-from torch_stft import STFT
+from stft_utils.stft import STFT
 import torch.distributed as dist
 
 from radam import RAdam,Lookahead
@@ -116,6 +116,8 @@ logging("[!] load data end")
 
 MSE_criterion = nn.MSELoss(reduction='mean')
 criterion = spectral_loss(coeff = [0,1,1,0])
+cds_criterion = CosineDistanceLoss()
+
 model = MMDenseNet(drop_rate=0.2,bn_size=4,k=12,l=3)
 if mode == 'ddp':
     model = apex.parallel.convert_syncbn_model(model)
@@ -140,7 +142,7 @@ if verbose and not is_test:
     log_writer = csv.writer(log)
     best_val = np.inf
     best_metric = np.inf
-# stft = STFT(filter_length = n_fft, hop_length = hop_length,window='hann').cuda()
+stft = STFT(filter_length = n_fft, hop_length = hop_length,window='hann').cuda()
 pool = mp.Pool(mp.cpu_count()//4 if mode == 'ddp' else mp.cpu_count())
 
 if start_epoch >0:
@@ -159,13 +161,26 @@ for epoch in range(start_epoch,n_epoch):
     for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         optimizer.zero_grad()
         x_train,y_train = _x.cuda(),_y.cuda()
-#         x_train_magnitude,x_train_phase = stft.transform(x_train)
-#         x_train = torch.cat([x_train_magnitude.unsqueeze(1),x_train_phase.unsqueeze(1)],dim=1)
+        x_train_magnitude,x_train_phase = stft.transform(x_train)
+        x_train_magnitude,x_train_phase = stft_normalize(x_train_magnitude,x_train_phase)
+        x_train = torch.cat([x_train_magnitude.unsqueeze(1),x_train_phase.unsqueeze(1)],dim=1)
 #         y_train_magnitude,y_train_phase = stft.transform(y_train)
+#         y_train_magnitude,y_train_phase = stft_normalize(y_train_magnitude,y_train_phase)
 #         y_train = torch.cat([y_train_magnitude.unsqueeze(1),y_train_phase.unsqueeze(1)],dim=1)
         
         pred = model(x_train)
-        loss = criterion(pred,y_train)
+        
+        pred_magnitude = pred[:,0,:,:]
+        pred_phase = pred[:,1,:,:]
+        
+        pred_magnitude,pred_phase = stft_denormalize(pred_magnitude,pred_phase)
+        
+        pred_magnitude = pred_magnitude.type(torch.cuda.FloatTensor)
+        pred_phase = pred_phase.type(torch.cuda.FloatTensor)
+#         print(pred.dtype)
+        pred_egg = stft.inverse(pred_magnitude,pred_phase)
+        loss = cds_criterion(pred_egg,y_train)
+#         loss = criterion(pred,y_train)
         
 #         loss = MSE_criterion(pred,y_train)
 #         loss = spec_loss*0.5 +mse_loss*0.5
@@ -174,6 +189,7 @@ for epoch in range(start_epoch,n_epoch):
         
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
+#         loss.backward()
 #         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 5)
         optimizer.step()
         
@@ -199,14 +215,27 @@ for epoch in range(start_epoch,n_epoch):
     model.eval()
     for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=(verbose==0))):
         x_val,y_val = _x.cuda(),_y.cuda()
-#         x_val_magnitude,x_val_phase = stft.transform(x_val)
-#         x_val = torch.cat([x_val_magnitude.unsqueeze(1),x_val_phase.unsqueeze(1)],dim=1)
+        x_val_magnitude,x_val_phase = stft.transform(x_val)
+        x_val_magnitude,x_val_phase = stft_normalize(x_val_magnitude,x_val_phase)
+        x_val = torch.cat([x_val_magnitude.unsqueeze(1),x_val_phase.unsqueeze(1)],dim=1)
 #         y_val_magnitude,y_val_phase = stft.transform(y_val)
+#         y_val_magnitude,y_val_phase = stft_normalize(y_val_magnitude,y_val_phase)
 #         y_val = torch.cat([y_val_magnitude.unsqueeze(1),y_val_phase.unsqueeze(1)],dim=1)
         
         with torch.no_grad():
             pred = model(x_val)
-            loss = criterion(pred,y_val)
+            
+            pred_magnitude = pred[:,0,:,:]
+            pred_phase = pred[:,1,:,:]
+            
+            pred_magnitude,pred_phase = stft_denormalize(pred_magnitude,pred_phase)
+            
+            pred_magnitude = pred_magnitude.type(torch.cuda.FloatTensor)
+            pred_phase = pred_phase.type(torch.cuda.FloatTensor)
+            
+            pred_egg = stft.inverse(pred_magnitude,pred_phase)
+            loss = cds_criterion(pred_egg,y_val)
+#             loss = criterion(pred,y_val)
 #             loss = MSE_criterion(pred,y_val)
 #             loss = spec_loss*0.5 +mse_loss*0.5
         if mode == 'ddp':
@@ -215,11 +244,11 @@ for epoch in range(start_epoch,n_epoch):
         else:
             val_loss += loss.item()/len(valid_loader)
         
-        pred = pred.cpu().detach().numpy()
+        pred_egg = pred_egg.cpu().detach().numpy()
         y_val = y_val.cpu().detach().numpy()
         
         if epoch%4 ==0:
-            CQ_diff_avg,SQ_diff_avg,CQ_diff_std,SQ_diff_std = metric(pred,y_val,hop_length,n_fft,n_frame,pool = None)
+            CQ_diff_avg,SQ_diff_avg,CQ_diff_std,SQ_diff_std = metric_egg(pred_egg,y_val,hop_length,n_fft,n_frame)
             if mode == 'ddp':
                 CQ_diff_avg = reduce_tensor(torch.Tensor([CQ_diff_avg]).cuda())
                 CQ_diff_std = reduce_tensor(torch.Tensor([CQ_diff_std]).cuda())

@@ -103,6 +103,18 @@ def loudness_normalize(audio, criterion = 0.1):
     power = np.mean(audio**2)
     return audio*criterion/(power+1e-3)
 
+def stft_normalize(stft_magnitude,stft_phase):
+    """
+    torch Tensor B,F,T
+    """
+    return torch.log10(1+stft_magnitude),stft_phase/np.pi
+
+def stft_denormalize(stft_magnitude,stft_phase):
+    """
+    torch Tensor B,F,T
+    """
+    return torch.pow(10,stft_magnitude)-1 , stft_phase*np.pi
+
 def stft_with_phase(audio,n_fft,hop_length,mode = 'concat'):
     stft = librosa.core.stft(np.asfortranarray(audio),n_fft = n_fft,hop_length = hop_length)
     mag = np.log10(1+np.abs(stft)) # [F,T] 
@@ -138,6 +150,39 @@ def _get_CQSQ(arg):
         CQ_pred,SQ_pred = get_CQSQ(_egg_pred,_degg_pred)
         CQ_true,SQ_true = get_CQSQ(_egg_true,_degg_true)
         return (CQ_pred-CQ_true)**2,(SQ_pred-SQ_true)**2
+
+def metric_egg(egg_pred,egg_target,hop_length,n_fft,length):
+    """
+    egg_pred : B,2,F,T ndarray
+    egg_target : B,2,F,T ndarray
+    return CQ_difference,SQ_difference values
+    """
+    B = egg_pred.shape[0]    
+    
+    CQ_diff,SQ_diff = [],[]
+
+    for i in range(B):
+#       _egg_pred = istft(stft_pred[i],hop_length,n_fft,length)
+#       _egg_true = istft(stft_target[i],hop_length,n_fft,length)
+        _egg_pred = egg_pred[i]
+        _egg_true = egg_target[i]
+        _egg_pred = smooth(_egg_pred, 25)
+        _degg_pred = np.gradient(_egg_pred,edge_order = 2)
+        _degg_true = np.gradient(_egg_true,edge_order = 2)
+
+        CQ_pred,SQ_pred = get_CQSQ(_egg_pred,_degg_pred)
+        CQ_true,SQ_true = get_CQSQ(_egg_true,_degg_true)
+
+        CQ_diff.append(np.abs(CQ_pred-CQ_true))
+        SQ_diff.append(np.abs(SQ_pred-SQ_true))
+    
+    CQ_diff_avg = np.mean(CQ_diff)
+    SQ_diff_avg = np.mean(SQ_diff)
+    CQ_diff_std = np.std(CQ_diff)
+    SQ_diff_std = np.std(SQ_diff)
+    
+    return CQ_diff_avg,SQ_diff_avg,CQ_diff_std,SQ_diff_std    
+    
     
 def metric(stft_pred,stft_target,hop_length,n_fft,length,pool=None):
     """
@@ -344,6 +389,11 @@ def get_CQSQ(EGG,DEGG):
     CQ = np.mean(CQ).astype('float32') if len(CQ)!=0 else 0
     SQ = np.mean(SQ).astype('float32') if len(SQ)!=0 else 0 
     return CQ,SQ
+
+def CosineDistanceLoss():
+    def f(pred,true):
+        return torch.mean(torch.acos(F.cosine_similarity(pred,true,dim=1,eps = 1e-4)),dim=0)
+    return f
 
 def MCWfilter(audio):
     """

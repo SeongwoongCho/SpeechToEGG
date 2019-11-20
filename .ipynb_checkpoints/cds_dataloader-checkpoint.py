@@ -120,6 +120,7 @@ class Dataset(torch.utils.data.Dataset):
         Y = loudness_normalize(Y).astype('float32')
         if self.aug:
             X = self.aug(X,self.normal_noise,self.musical_noise)
-        X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
-        Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
+
+#         X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
+#         Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
         return X,Y

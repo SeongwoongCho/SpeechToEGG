@@ -166,7 +166,7 @@ class MMDenseNet(nn.Module):
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
         output = self.out(output)
-        output_mag = F.relu(output[:,0,:,:]).unsqueeze(1)
+        output_mag = 3*F.sigmoid(output[:,0,:,:]).unsqueeze(1)
         output_phase = F.tanh(output[:,1,:,:]).unsqueeze(1)
         output = torch.cat([output_mag,output_phase],1)
         
