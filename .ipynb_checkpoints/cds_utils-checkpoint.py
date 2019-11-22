@@ -99,6 +99,35 @@ def custom_aug_v3(n_frame = 10000):
         return mix_db(x,y,db_2)
     return _custom_aug
 
+def custom_stft_aug(n_frame = 64):
+    def _custom_aug(x,normal_noise,musical_noise):
+        
+        db_1 = np.random.uniform(low=0,high=35)
+        p_1 = np.random.uniform()
+        p_2 = np.random.uniform()
+  
+        if 0.1 < p_1 < 0.6:
+            pi = random.randint(0,len(normal_noise)-1)
+            pi2 = random.randint(0,len(normal_noise[pi])-n_frame-1)
+            y = normal_noise[pi][:,pi2:pi2+n_frame]
+            x = mix_db(x,y,db_1)
+        elif 0.6 < p_1:
+            pi = random.randint(0,len(musical_noise)-1)
+            pi2 = random.randint(0,len(musical_noise[pi])-n_frame-1)
+            y = musical_noise[pi][:,pi2:pi2+n_frame]
+            x = mix_db(x,y,db_1)
+        
+        if p_2 < 0.9:
+            power = np.random.uniform(0,0.1)
+            x = (1-power)*x + power*np.random.normal(x)
+        return x
+def stft_to_mel(stft):
+    yS = np.abs(stft)
+    yS = librosa.feature.melspectrogram(S=librosa.amplitude_to_db(yS),sr=16000,n_mels=80,
+                                            n_fft=512, hop_length=128,fmax=8192,fmin=60)
+    yS = librosa.util.normalize(yS)
+    return yS
+
 def loudness_normalize(audio, criterion = 0.1):
     power = np.mean(audio**2)
     return audio*criterion/(power+1e-3)

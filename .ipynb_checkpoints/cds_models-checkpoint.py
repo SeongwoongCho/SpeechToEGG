@@ -89,7 +89,7 @@ class _MDenseNet_STEM(nn.Module):
         self.scale = scale
         self.kl = kl
         
-        self.first_conv = nn.Conv2d(2,first_channel,first_kernel)
+        self.first_conv = nn.Conv2d(1,first_channel,first_kernel)
         self.downsample_layer = nn.MaxPool2d(kernel_size=2,stride=2)
         
         self.upsample_layers = nn.ModuleList()
@@ -153,7 +153,8 @@ class MMDenseNet(nn.Module):
             _DenseBlock( 
                 2, last_channel, bn_size, 4, drop_rate),
             nn.ReLU(),
-            nn.Conv2d(last_channel+8,2,1),
+            nn.Conv2d(last_channel+8,1,1),
+            nn.Tanh()
         )
         
     def forward(self,input):
@@ -166,8 +167,9 @@ class MMDenseNet(nn.Module):
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
         output = self.out(output)
-        output_mag = 3*F.sigmoid(output[:,0,:,:]).unsqueeze(1)
-        output_phase = F.tanh(output[:,1,:,:]).unsqueeze(1)
-        output = torch.cat([output_mag,output_phase],1)
+#         output_mag = 3*F.sigmoid(output[:,0,:,:]).unsqueeze(1)
+#         output_phase = F.tanh(output[:,1,:,:]).unsqueeze(1)
+#         output = torch.cat([output_mag,output_phase],1)
         
+    
         return output

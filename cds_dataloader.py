@@ -31,8 +31,8 @@ def load_datas(n_frame,is_test = False):
     print("load Train Datas")
     args = [] ## [..(drt,file,n_frame)..]
     
-    for drt in ['./datasets/TrainData/Alexis/','./datasets/TrainData/vietnam/','./datasets/TrainData/Childer/',
-               './datasets/TrainData/CMU/','./datasets/TrainData/saarbrucken/']:
+    for drt in ['../eggdata/TrainData/Alexis/','../eggdata/TrainData/vietnam/','../eggdata/TrainData/Childer/',
+               '../eggdata/TrainData/CMU/','../eggdata/TrainData/saarbrucken/']:
         for file in os.listdir(drt):
             if 'wav' in file:
                 args.append((drt,file,n_frame))
@@ -53,11 +53,11 @@ def load_datas(n_frame,is_test = False):
     return train_X,train_y,val_X,val_y
 
 def load_datas_path(n_frame,is_test = False):
-    TrainPath_x = './datasets/TrainData/trainX_%d/'%n_frame
-    TrainPath_y = './datasets/TrainData/trainy_%d/'%n_frame
+    TrainPath_x = '../eggdata/TrainData/trainX_%d/'%n_frame
+    TrainPath_y = '../eggdata/TrainData/trainy_%d/'%n_frame
     
-    ValidPath_x = './datasets/TrainData/valX_%d/'%n_frame
-    ValidPath_y = './datasets/TrainData/valy_%d/'%n_frame
+    ValidPath_x = '../eggdata/TrainData/valX_%d/'%n_frame
+    ValidPath_y = '../eggdata/TrainData/valy_%d/'%n_frame
 
     Train_x = []
     Train_y = []
@@ -79,21 +79,6 @@ def load_datas_path(n_frame,is_test = False):
         Val_x = Val_x[:1000]
         Val_y = Val_y[:1000]
     return Train_x,Train_y,Val_x,Val_y
-
-def load_noise(n_frame,is_test=False):
-    normal_dir = './datasets/TrainData/normal_noise/'
-    musical_dir = './datasets/TrainData/musical_noise/'
-    normal_noise_files = os.listdir(normal_dir)
-    musical_noise_files = os.listdir(musical_dir)
-    
-    if is_test:
-        normal_noise_files = normal_noise_files[:10]
-        musical_noise_files = musical_noise_files[:10]
-    
-    normal_noise = [librosa.load(normal_dir+file,sr=16000)[0] for file in normal_noise_files]
-    musical_noise = [librosa.load(musical_dir+file,sr=16000)[0] for file in musical_noise_files]
-    
-    return normal_noise, musical_noise
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self,X,y,n_fft,hop_length,n_frame,is_train = True,normal_noise = None,musical_noise=None,aug=None):
@@ -121,6 +106,77 @@ class Dataset(torch.utils.data.Dataset):
         if self.aug:
             X = self.aug(X,self.normal_noise,self.musical_noise)
 
+#         X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
+#         Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
+        return X,Y
+
+def load_stft_datas_path(is_test = False):
+    TrainPath = '../eggdata/TrainSTFT/train_data/'
+    ValidPath = '../eggdata/TrainSTFT/valid_data/'
+
+    Train = []
+    Val = []
+    
+    for file in os.listdir(TrainPath):
+        if 'npy' in file:
+            Train.append(TrainPath + file)
+    for file in os.listdir(ValidPath):
+        if 'npy' in file:
+            Val.append(ValidPath + file)
+            
+    if is_test:
+        Train = Train[:1000] ## N,(2,F,T)
+        Val = Val[:1000] ## N,(2,F,T)
+    return Train,Val
+
+def load_stft_noise(is_test=False):
+    normal_dir = '../eggdata/TrainSTFT/noise/normal/'
+    musical_dir = '../eggdata/TrainSTFT/noise/musical/'
+    normal_noise_files = os.listdir(normal_dir)
+    musical_noise_files = os.listdir(musical_dir)
+    
+    if is_test:
+        normal_noise_files = normal_noise_files[:10]
+        musical_noise_files = musical_noise_files[:10]
+    
+    normal_noise = [np.load(normal_dir+file) for file in normal_noise_files]
+    musical_noise = [np.load(musical_dir+file) for file in musical_noise_files]
+    
+    return normal_noise, musical_noise
+
+class STFTDataset(torch.utils.data.Dataset):
+    def __init__(self,X,n_frame,is_train = True,normal_noise = None,musical_noise=None,aug=None):
+        self.data = X
+        self.n_frame = n_frame
+        self.is_train = is_train
+        self.aug= aug
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self,idx):
+        if isinstance(self.data[idx],str):
+            [X,Y] = np.load(self.data[idx])
+        else:
+            [X,Y] = self.data[idx]
+#         X = loudness_normalize(X).astype('float32')
+#         Y = loudness_normalize(Y).astype('float32')
+        
+        ### random crop
+        T = X.shape[1]
+        if T<self.n_frame:
+            X = np.pad(X,((0,0),(0,self.n_frame-T)),mode = 'constant')
+            Y = np.pad(Y,((0,0),(0,self.n_frame-T)),mode = 'constant')
+        elif T>self.n_frame:
+            pi = np.random.randint(T-self.n_frame)
+            X = X[:,pi:pi+self.n_frame]
+            Y = Y[:,pi:pi+self.n_frame]
+#         print(X.shape)
+        if self.aug:
+            X = self.aug(X,self.normal_noise,self.musical_noise)
+#         print(X.shape)
+        X = stft_to_mel(X)[np.newaxis,:]
+        Y = stft_to_mel(Y)[np.newaxis,:]
+#         print(X.shape)
+#         print(Y.shape)
 #         X = stft_with_phase(X,self.n_fft,self.hop_length,'channel')
 #         Y = stft_with_phase(Y,self.n_fft,self.hop_length,'channel')
         return X,Y
