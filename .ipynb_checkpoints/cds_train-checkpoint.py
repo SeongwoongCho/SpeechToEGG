@@ -26,6 +26,7 @@ from cds_models import MMDenseNet
 import apex
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
+from sync_batchnorm import convert_model
 
 seed_everything(42)
 ###Hyper parameters
@@ -46,12 +47,14 @@ parser.add_argument('--scheduler_gamma',type=float,default=0.1)
 parser.add_argument('--test',action='store_true')
 parser.add_argument('--start_epoch',type=int,default=0)
 parser.add_argument('--mode',type=str,default ='ddp')
+parser.add_argument('--mixed',action='store_true')
 parser.add_argument('--local_rank',type=int,default=0)
 
 args = parser.parse_args()
 
 ##train ? or test? 
 is_test = args.test
+mixed = args.mixed
 mode = args.mode
 start_epoch = args.start_epoch
 ##training parameters
@@ -125,19 +128,22 @@ cds_criterion = CosineDistanceLoss()
 
 model = MMDenseNet(drop_rate=0.2,bn_size=4,k=12,l=3)
 if mode == 'ddp':
-    model = apex.parallel.convert_syncbn_model(model)
-    
+#     model = apex.parallel.convert_syncbn_model(model)
+#     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    model = convert_model(model)
 model.cuda()
 
 optimizer = RAdam(model.parameters(), lr=learning_rate, betas=(beta1, beta2), eps=1e-8, weight_decay=weight_decay)
 optimizer = Lookahead(optimizer,alpha=0.5,k=6)
-model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
+if mixed:
+    model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
 
 if mode == 'ddp':
     model = torch.nn.parallel.DistributedDataParallel(model,
                                                       device_ids=[args.local_rank],
                                                       output_device=0)
+    
 else:
     model = torch.nn.DataParallel(model)
 
@@ -192,9 +198,11 @@ for epoch in range(start_epoch,n_epoch):
 #         if loss.item()>100:
 #             print(loss.item())
         
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-#         loss.backward()
+        if mixed:
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
 #         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 5)
         optimizer.step()
         
@@ -251,11 +259,13 @@ for epoch in range(start_epoch,n_epoch):
             val_loss += loss.item()/len(valid_loader)
         
     ## save images on every 10 epoch
-    if epoch % 10 == 0:
+    if epoch % 10 == 0 and verbose and not is_test:
+        pred = torch.cat([pred,pred,pred],dim=1)
+        y_val = torch.cat([y_val,y_val,y_val],dim=1)
         pred = make_grid(pred, normalize=True, scale_each=True)
         y_val = make_grid(y_val, normalize=True, scale_each=True)
-        writer.add_image('pred/mel', pred, epoch)
-        writer.add_image('true/mel', y, epoch)
+        writer.add_image('img_pred/mel', pred, epoch)
+        writer.add_image('img_true/mel', y_val, epoch)
     
 #         pred_egg = pred_egg.cpu().detach().numpy()
 #         y_val = y_val.cpu().detach().numpy()
@@ -287,5 +297,6 @@ for epoch in range(start_epoch,n_epoch):
     logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,time.time()-st))    
 # if verbose and not is_test:
 #     log.close()
+writer.close()
 logging("[!] training end")
 
