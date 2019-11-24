@@ -21,7 +21,7 @@ from radam import RAdam,Lookahead
 from cds_utils import *
 from cds_utils import _get_CQSQ
 from cds_dataloader import *
-from cds_models import MMDenseNet
+from cds_models import MMDenseNet, Vgg16
 
 import apex
 from apex import amp
@@ -123,8 +123,9 @@ logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
 MSE_criterion = nn.MSELoss(reduction='mean')
-criterion = spectral_loss(coeff = [0,1,1,0])
+spec_criterion = spectral_loss(coeff = [0,1,1,0])
 cds_criterion = CosineDistanceLoss()
+L1_criterion = nn.L1Loss()
 
 model = MMDenseNet(drop_rate=0.2,bn_size=4,k=12,l=3)
 if mode == 'ddp':
@@ -142,20 +143,44 @@ scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
 if mode == 'ddp':
     model = torch.nn.parallel.DistributedDataParallel(model,
                                                       device_ids=[args.local_rank],
-                                                      output_device=0)
-    
+                                                      output_device=0)    
 else:
     model = torch.nn.DataParallel(model)
 
+"""
+vgg model for computing composite spectrogram loss
+"""
+vgg =  Vgg16(requires_grad=False)
+if mode == 'ddp':
+#     model = apex.parallel.convert_syncbn_model(model)
+#     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    vgg = convert_model(vgg)
+vgg.cuda()
+
+if mode == 'ddp':
+    vgg = torch.nn.parallel.DistributedDataParallel(vgg,
+                                                      device_ids=[args.local_rank],
+                                                      output_device=0)    
+else:
+    vgg = torch.nn.DataParallel(vgg)    
+
+"""
+Training
+"""
+    
 logging("[*] training ...")
 if verbose and not is_test:
 #     log = open(os.path.join(save_path,'log.csv'), 'a+', encoding='utf-8', newline='')
 #     log_writer = csv.writer(log)
     writer = SummaryWriter('../log/%s/'%args.exp_num)
+#     hparams = {'batch_size' : batch_size, 'n_frame' : n_frame, 'lr' : learning_rate,'lr_step' : step_size,'gamma':scheduler_gamma,'beta1':beta1,'beta2':beta2, 'weight_decay' : weight_decay}
+    
+#     writer.add_hparams(hparams,{})
+    
     best_val = np.inf
     best_metric = np.inf
 # stft = STFT(filter_length = n_fft, hop_length = hop_length,window='hann').cuda()
-pool = mp.Pool(mp.cpu_count()//4 if mode == 'ddp' else mp.cpu_count())
+# pool = mp.Pool(mp.cpu_count()//4 if mode == 'ddp' else mp.cpu_count())
 
 if start_epoch >0:
     model.load_state_dict(torch.load(save_path+"best.pth"))
@@ -164,6 +189,10 @@ for epoch in range(start_epoch,n_epoch):
     st = time.time()
     train_sampler.set_epoch(epoch)
     train_loss = 0.
+    train_L2_loss = 0.
+    train_content_loss = 0.
+    train_style_loss = 0.
+    
 #     train_CQ_diff = 0.
 #     train_SQ_diff = 0.
     optimizer.zero_grad()
@@ -172,31 +201,26 @@ for epoch in range(start_epoch,n_epoch):
     for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         optimizer.zero_grad()
         x_train,y_train = _x.cuda(),_y.cuda()
-#         x_train_magnitude,x_train_phase = stft.transform(x_train)
-#         x_train_magnitude,x_train_phase = stft_normalize(x_train_magnitude,x_train_phase)
-#         x_train = torch.cat([x_train_magnitude.unsqueeze(1),x_train_phase.unsqueeze(1)],dim=1)
-#         y_train_magnitude,y_train_phase = stft.transform(y_train)
-#         y_train_magnitude,y_train_phase = stft_normalize(y_train_magnitude,y_train_phase)
-#         y_train = torch.cat([y_train_magnitude.unsqueeze(1),y_train_phase.unsqueeze(1)],dim=1)
-        
         pred = model(x_train)
+        vgg_input_pred = normalize_batch(pred)
+        vgg_input_y = normalize_batch(y_train)
+        print(0)
+        pred_feature = vgg(vgg_input_pred)
+        print(1)
+        true_feature = vgg(vgg_input_y)
+        print(2)
+        gram_style = [gram_matrix(y) for y in true_feature]
+        print(3)
+        L2_loss = MSE_criterion(pred,y_train)
+        print(4)
+        content_loss = MSE_criterion(pred_feature.relu2_2,true_feature.relu2_2)
+        print(5)
+        style_loss = 0.
+        for ft_pred,gm_s in zip(pred_feature,gram_style):
+            gm_y = gram_matrix(ft_pred)
+            style_loss += mse_loss(gm_y,gm_s)
         
-#         pred_magnitude = pred[:,0,:,:]
-#         pred_phase = pred[:,1,:,:]
-        
-#         pred_magnitude,pred_phase = stft_denormalize(pred_magnitude,pred_phase)
-        
-#         pred_magnitude = pred_magnitude.type(torch.cuda.FloatTensor)
-#         pred_phase = pred_phase.type(torch.cuda.FloatTensor)
-#         print(pred.dtype)
-#         pred_egg = stft.inverse(pred_magnitude,pred_phase)
-#         loss = cds_criterion(pred_egg,y_train)
-        loss = MSE_criterion(pred,y_train)
-        
-#         loss = MSE_criterion(pred,y_train)
-#         loss = spec_loss*0.5 +mse_loss*0.5
-#         if loss.item()>100:
-#             print(loss.item())
+        loss = 0.5*L2_loss + 0.25*content_loss + 0.25*style_loss
         
         if mixed:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -209,9 +233,18 @@ for epoch in range(start_epoch,n_epoch):
         if mode == 'ddp':
             reduced_loss = reduce_tensor(loss.data)
             train_loss += reduced_loss.item() / len(train_loader)
+            reduced_L2_loss = reduce_tensor(L2_loss.data)
+            train_L2_loss += reduced_L2_loss.item() / len(train_loader)
+            reduced_content_loss = reduce_tensor(content_loss.data)
+            train_content_loss += reduced_content_loss.item() / len(train_loader)
+            reduced_style_loss = reduce_tensor(style_loss.data)
+            train_style_loss += reduced_style_loss.item() / len(train_loader)
         else:
             train_loss += loss.item() / len(train_loader)
-        
+            train_L2_loss += L2_loss.item() / len(train_loader)
+            train_content_loss += train_content_loss.item() / len(train_loader)
+            train_style_loss += train_style_loss.item() / len(train_loader)
+            
 #         CQ_diff,SQ_diff = metric(pred.cpu().detach().numpy(),y_train.cpu().detach().numpy(),hop_length,n_fft)
 #         if mode == 'ddp':
 #             CQ_diff = reduce_tensor(torch.Tensor([CQ_diff]).cuda())
@@ -219,8 +252,10 @@ for epoch in range(start_epoch,n_epoch):
 #         train_CQ_diff += CQ_diff.item()/len(train_loader)
 #         train_SQ_diff += SQ_diff.item()/len(train_loader)
         
-    
     val_loss = 0.
+    val_L2_loss = 0.
+    val_content_loss = 0.
+    val_style_loss = 0.
 #     valid_CQ_diff_avg =0
 #     valid_CQ_diff_std = 0
 #     valid_SQ_diff_avg = 0
@@ -229,44 +264,40 @@ for epoch in range(start_epoch,n_epoch):
     model.eval()
     for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=(verbose==0))):
         x_val,y_val = _x.cuda(),_y.cuda()
-#         x_val_magnitude,x_val_phase = stft.transform(x_val)
-#         x_val_magnitude,x_val_phase = stft_normalize(x_val_magnitude,x_val_phase)
-#         x_val = torch.cat([x_val_magnitude.unsqueeze(1),x_val_phase.unsqueeze(1)],dim=1)
-#         y_val_magnitude,y_val_phase = stft.transform(y_val)
-#         y_val_magnitude,y_val_phase = stft_normalize(y_val_magnitude,y_val_phase)
-#         y_val = torch.cat([y_val_magnitude.unsqueeze(1),y_val_phase.unsqueeze(1)],dim=1)
         
         with torch.no_grad():
             pred = model(x_val)
+            vgg_input_pred = normalize_batch(pred)
+            vgg_input_y = normalize_batch(y_val)
+            pred_feature = vgg(normalize_batch(vgg_input_pred))
+            true_feature = vgg(normalize_batch(vgg_input_y))
+            gram_style = [gram_matrix(y) for y in true_feature]
+
+            L2_loss = MSE_criterion(pred,y_val)
+            content_loss = MSE_criterion(pred_feature.relu2_2,true_feature.relu2_2)
+            style_loss = 0.
+            for ft_pred,gm_s in zip(pred_feature,gram_style):
+                gm_y = gram_matrix(ft_pred)
+                style_loss += mse_loss(gm_y,gm_s)
+        
+            loss = 0.5*L2_loss + 0.25*content_loss + 0.25*style_loss
             
-#             pred_magnitude = pred[:,0,:,:]
-#             pred_phase = pred[:,1,:,:]
-            
-#             pred_magnitude,pred_phase = stft_denormalize(pred_magnitude,pred_phase)
-            
-#             pred_magnitude = pred_magnitude.type(torch.cuda.FloatTensor)
-#             pred_phase = pred_phase.type(torch.cuda.FloatTensor)
-            
-#             pred_egg = stft.inverse(pred_magnitude,pred_phase)
-#             loss = cds_criterion(pred_egg,y_val)
-            loss = MSE_criterion(pred,y_val)
-#             loss = MSE_criterion(pred,y_val)
-#             loss = spec_loss*0.5 +mse_loss*0.5
         if mode == 'ddp':
             reduced_loss = reduce_tensor(loss.data)
             val_loss += reduced_loss.item()/len(valid_loader)
+            
+            reduced_L2_loss = reduce_tensor(L2_loss.data)
+            val_L2_loss += reduced_L2_loss.item() / len(valid_loader)
+            reduced_content_loss = reduce_tensor(content_loss.data)
+            val_content_loss += reduced_content_loss.item() / len(valid_loader)
+            reduced_style_loss = reduce_tensor(style_loss.data)
+            val_style_loss += reduced_style_loss.item() / len(valid_loader)
         else:
             val_loss += loss.item()/len(valid_loader)
-        
-    ## save images on every 10 epoch
-    if epoch % 10 == 0 and verbose and not is_test:
-        pred = torch.cat([pred,pred,pred],dim=1)
-        y_val = torch.cat([y_val,y_val,y_val],dim=1)
-        pred = make_grid(pred, normalize=True, scale_each=True)
-        y_val = make_grid(y_val, normalize=True, scale_each=True)
-        writer.add_image('img_pred/mel', pred, epoch)
-        writer.add_image('img_true/mel', y_val, epoch)
-    
+            val_loss += L2_loss.item()/len(valid_loader)
+            val_content_loss += val_content_loss.item() / len(valid_loader)
+            val_style_loss += val_style_loss.item() / len(valid_loader)
+            
 #         pred_egg = pred_egg.cpu().detach().numpy()
 #         y_val = y_val.cpu().detach().numpy()
         
@@ -285,18 +316,30 @@ for epoch in range(start_epoch,n_epoch):
         if val_loss < best_val:
             torch.save(model.state_dict(), os.path.join(save_path,'best.pth'))
             best_val = val_loss
-        
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/val',val_loss,epoch)
+            
+            pred = torch.cat([pred,pred,pred],dim=1)
+            y_val = torch.cat([y_val,y_val,y_val],dim=1)
+            pred = make_grid(pred, normalize=True, scale_each=True)
+            y_val = make_grid(y_val, normalize=True, scale_each=True)
+            writer.add_image('img_pred/mel', pred, epoch)
+            writer.add_image('img_true/mel', y_val, epoch)
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            writer.add_scalar('Loss/val',val_loss,epoch)
+            writer.add_scalar('pixel_L2_Loss/train', train_L2_loss, epoch)
+            writer.add_scalar('pixel_L2_Loss/val',val_L2_loss,epoch)
+            writer.add_scalar('pixel_content_Loss/train', train_content_loss, epoch)
+            writer.add_scalar('pixel_content_Loss/val',val_content_loss,epoch)
+            writer.add_scalar('pixel_style_Loss/train', train_style_loss, epoch)
+            writer.add_scalar('pixel_style_Loss/val',val_style_loss,epoch)
 #         writer.add_scalar('CQ_diff_avg/val',valid_CQ_diff_avg)
 #         writer.add_scalar('CQ_diff_std/val',valid_CQ_diff_std)
 #         writer.add_scalar('SQ_diff_avg/val',valid_SQ_diff_avg)
 #         writer.add_scalar('SQ_diff_std/val',valid_SQ_diff_std)
 #     logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f valid_CQ_diff_avg %.6f valid_CQ_diff_std %.6f valid_SQ_diff_avg %.6fvalid_SQ_diff_std %.6f duration : %.4f"%
 #         (epoch,n_epoch,train_loss,val_loss,valid_CQ_diff_avg,valid_CQ_diff_std,valid_SQ_diff_avg,valid_SQ_diff_std,time.time()-st))
-    logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,time.time()-st))    
-# if verbose and not is_test:
+    logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f train_L2_loss %.6f valid_L2_loss %.6f train_content_loss %.6f valid_content_loss %.6f train_style_loss %.6f valid_style_loss %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,train_L2_loss,val_L2_loss,train_content_loss,val_content_loss, train_style_loss, valid_style_loss, time.time()-st))    
+if verbose and not is_test:
 #     log.close()
-writer.close()
+    writer.close()
 logging("[!] training end")
 

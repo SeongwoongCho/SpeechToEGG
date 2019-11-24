@@ -99,6 +99,54 @@ def custom_aug_v3(n_frame = 10000):
         return mix_db(x,y,db_2)
     return _custom_aug
 
+def spec_masking(spec, F = 15, T = 10, num_masks = 1, prob = 0.7, replace_with_zero = True):
+    def _freq_mask(spec, F=F, num_masks=num_masks, replace_with_zero=replace_with_zero):
+#     cloned = spec.clone()
+        num_mel_channels = spec.shape[0]
+        
+        for i in range(0, num_masks):        
+            f = random.randrange(0, F)
+            f_zero = random.randrange(0, num_mel_channels - f)
+    
+            # avoids randrange error if values are equal and range is empty
+            if f_zero == f_zero + f:
+                return spec
+    
+            mask_end = random.randrange(f_zero, f_zero + f) 
+            if replace_with_zero:
+                spec[f_zero:mask_end,:] = 0
+            else:
+                spec[f_zero:mask_end,:] = spec.mean()
+        return spec
+
+    def _time_mask(spec, T=T, num_masks=num_masks, replace_with_zero=replace_with_zero):
+    #     cloned = spec.clone()
+        len_spectro = spec.shape[1]
+      #  print("len",len_spectro)
+
+        for i in range(0, num_masks):
+            t = random.randrange(0, T)
+            if len_spectro<=t:
+                return spec
+            t_zero = random.randrange(0, len_spectro - t)
+            # avoids randrange error if values are equal and range is empty
+            if t_zero == t_zero + t:
+                return spec
+
+            mask_end = random.randrange(t_zero, t_zero + t)
+            if replace_with_zero:
+                spec[:,t_zero:mask_end] = 0
+            else:
+                spec[:,t_zero:mask_end] = spec.mean()
+        return spec
+    
+    if np.random.uniform()>prob:
+        return spec
+    else:
+        spec = _freq_mask(spec)
+        spec = _time_mask(spec)
+    return spec
+
 def custom_stft_aug(n_frame = 64):
     def _custom_aug(x,normal_noise,musical_noise):
         
@@ -120,11 +168,15 @@ def custom_stft_aug(n_frame = 64):
         if p_2 < 0.9:
             power = np.random.uniform(0,0.1)
             x = (1-power)*x + power*np.random.normal(x)
+        x = spec_masking(x, F = 10, T = 5, num_masks = 2, prob = 0.75, replace_with_zero = True)
         return x
+    
 def stft_to_mel(stft):
     yS = np.abs(stft)
-    yS = librosa.feature.melspectrogram(S=librosa.amplitude_to_db(yS),sr=16000,n_mels=80,
-                                            n_fft=512, hop_length=128,fmax=8192,fmin=60)
+#     yS = librosa.feature.melspectrogram(S=librosa.amplitude_to_db(yS),sr=16000,n_mels=80,
+#                                             n_fft=512, hop_length=128,fmax=8192,fmin=60)
+    yS = librosa.amplitude_to_db(librosa.feature.melspectrogram(S=yS,sr=16000,n_mels=80,
+                                            n_fft=512, hop_length=128,fmax=8192,fmin=60))
     yS = librosa.util.normalize(yS)
     return yS
 
@@ -423,6 +475,28 @@ def CosineDistanceLoss():
     def f(pred,true):
         return torch.mean(torch.acos(F.cosine_similarity(pred,true,dim=1,eps = 1e-4)),dim=0)
     return f
+
+def gram_matrix(y):
+    (b, ch, h, w) = y.size()
+    features = y.view(b, ch, w * h)
+    features_t = features.transpose(1, 2)
+    gram = features.bmm(features_t) / (ch * h * w)
+    return gram
+
+def normalize_batch(batch):
+    """
+    input shape : B,1,F,T
+    output shape : B,3,F,T with normalized batch
+    """
+    
+    # normalize using imagenet mean and std
+    vgg_batch = (1 + batch.clone())/2 ## normalize to [0,1]
+    vgg_batch = torch.cat([vgg_batch,vgg_batch,vgg_batch],dim=1) ## B,3,F,T
+    mean = vgg_batch.new_tensor([0.485, 0.456, 0.406]).view(-1, 1, 1)
+    std = vgg_batch.new_tensor([0.229, 0.224, 0.225]).view(-1, 1, 1)
+#     batch = batch.div_(255.0)
+    
+    return (vgg_batch - mean) / std
 
 def MCWfilter(audio):
     """

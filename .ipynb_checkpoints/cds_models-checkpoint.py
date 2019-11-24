@@ -4,6 +4,8 @@ import torch.nn as nn
 import numpy as np
 from torch.nn import functional as F
 from torch import Tensor
+from torchvision import models
+from collections import namedtuple
 
 class _DenseLayer(nn.Module):
     def __init__(self, num_input_features, growth_rate, bn_size, drop_rate, memory_efficient=False):
@@ -158,11 +160,10 @@ class MMDenseNet(nn.Module):
         )
         
     def forward(self,input):
-#         print(input.shape)
         B,C,Fre,T = input.shape
         low_input = input[:,:,:Fre//2,:]
         high_input = input[:,:,Fre//2:,:]
-        
+#         print("input_shape : ",low_input.shape)
         output = torch.cat([self.lowNet(low_input),self.highNet(high_input)],2)##Frequency 방향
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
@@ -173,3 +174,41 @@ class MMDenseNet(nn.Module):
         
     
         return output
+
+
+class Vgg16(torch.nn.Module):
+    def __init__(self, requires_grad=False):
+        super(Vgg16, self).__init__()
+        vgg_pretrained_features = models.vgg16(pretrained=True).features
+        self.slice1 = torch.nn.Sequential()
+        self.slice2 = torch.nn.Sequential()
+        self.slice3 = torch.nn.Sequential()
+        self.slice4 = torch.nn.Sequential()
+        for x in range(4):
+            self.slice1.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(4, 9):
+            self.slice2.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(9, 16):
+            self.slice3.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(16, 23):
+            self.slice4.add_module(str(x), vgg_pretrained_features[x])
+        if not requires_grad:
+            for param in self.parameters():
+                param.requires_grad = False
+
+    def forward(self, X):
+        h = self.slice1(X)
+        h_relu1_2 = h
+        h = self.slice2(h)
+        h_relu2_2 = h
+        h = self.slice3(h)
+        h_relu3_3 = h
+        h = self.slice4(h)
+        h_relu4_3 = h
+        vgg_outputs = namedtuple("VggOutputs", ['relu1_2', 'relu2_2', 'relu3_3', 'relu4_3'])
+#         print("a")
+#         print(h_relu1_2, h_relu2_2, h_relu3_3, h_relu4_3)
+        out = vgg_outputs(h_relu1_2, h_relu2_2, h_relu3_3, h_relu4_3)
+#         print("b")
+#         print(out)
+        return out

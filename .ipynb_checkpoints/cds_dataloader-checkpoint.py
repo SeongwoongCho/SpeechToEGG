@@ -163,8 +163,10 @@ class STFTDataset(torch.utils.data.Dataset):
         ### random crop
         T = X.shape[1]
         if T<self.n_frame:
-            X = np.pad(X,((0,0),(0,self.n_frame-T)),mode = 'constant')
-            Y = np.pad(Y,((0,0),(0,self.n_frame-T)),mode = 'constant')
+            left = np.random.randint(self.n_frame-T)
+            right = self.n_frame-T-left
+            X = np.pad(X,((0,0),(left,right)),mode = 'constant',constant_values=(-1))
+            Y = np.pad(Y,((0,0),(left,right)),mode = 'constant',constant_values=(-1))
         elif T>self.n_frame:
             pi = np.random.randint(T-self.n_frame)
             X = X[:,pi:pi+self.n_frame]
