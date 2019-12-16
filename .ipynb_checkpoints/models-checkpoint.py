@@ -199,7 +199,7 @@ class _MDenseNet_STEM(nn.Module):
         return output
     
 class MMDenseNet(nn.Module):
-    def __init__(self,drop_rate = 0.1,bn_size=4,k1=10,l1=3,k2=None,l2=None,attention = None):
+    def __init__(self,drop_rate = 0.1,bn_size=4,k1=10,l1=3,k2=None,l2=None,attention = None,out_relu = True):
         super(MMDenseNet,self).__init__()
         
         if k2 is None:
@@ -221,7 +221,7 @@ class MMDenseNet(nn.Module):
             nn.ReLU(),
             nn.Conv2d(last_channel+8,1,1),
 #             nn.Tanh()
-            nn.Sigmoid()
+            nn.ReLU() if out_relu else nn.Sigmoid()
         )
         
     def forward(self,input):

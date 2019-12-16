@@ -504,7 +504,76 @@ cgan loss : BCE(pred,1)
 
 disc loss = (BCE(pred,0) + BCE(true,1))*0.5
 
-## todo
-# 1. recon loss에 pixel L2 loss 대신에 content loss 로 바꾸어 보기 (SRGAN의 아이디어)
-# 2. recon loss를 전부 L1으로 바꾸어 보기 (pix2pix의 아이디어)
-# 3. 
+# exp 16 : modify normalization --> change last activation sigmoid to Relu, λ = 3
+
+-log(clip(mel(S))) 
+
+label smoothing
+discriminator noise
+
+lr : 3e-4
+batch_size : 96
+n_frame : 64
+n_epoch : 1000
+lr_step : 400
+gamma : 0.1
+beta1 : 0.9
+beta2 : 0.999
+weight_decay :1e-5
+TTUR : 3
+
+discriminator_whitenoise_sigma = 0.05
+
+==model parameter == 
+Generator : MMDenseNet
+    drop_rate = 0.25
+    bn_size = 4
+    k1,l1 = 10,3
+    k2,l2 = 14,4
+    CBAM attention
+    
+Discriminator : customGAN_discriminator (spectral normalization)
+    no hyper parameter
+
+policy : if val_loss < 0.4 stop training, if val_loss > 0.5 restart training
+
+radam + lookahead(k=6,alpha=.5)
+exp 0 augmentation(but, padding -1 with random l,r) +  Time/freq masking(F = 10, T = 5, num_masks = 2, prob = 1) after mel
+
+λ = 3
+
+gen loss = cgan loss + λ*recon_loss
+
+recon loss : pixel L1 loss(0.5) + freq_derivative L1 loss(0.5)
+cgan loss : BCE(pred,1)
+
+disc loss = (BCE(pred,0) + BCE(true,1))*0.5
+
+###### 위의 실험들은 augmentation이 전혀 진행되고 있지 않았음. return 해주지 않았었음.... ㅅㅂ ㅅㅂ 아 족같다! 
+
+# exp 17 : No GAN, modify masking parameter, modify STFT data.., n_frame -> 128
+
+-log(clip(mel(S))) 
+
+lr : 3e-4
+batch_size : 44
+n_frame : 128
+n_epoch : 600
+lr_step : 250
+gamma : 0.1
+beta1 : 0.9
+beta2 : 0.999
+weight_decay :1e-5
+
+==model parameter == 
+Generator : MMDenseNet
+    drop_rate = 0.25
+    bn_size = 4
+    k1,l1 = 10,3
+    k2,l2 = 14,4
+    CBAM attention
+
+radam + lookahead(k=6,alpha=.5)
+exp 0 augmentation(but, padding -1 with random l,r) +  Time/freq masking(F = 1, T = 1, num_masks = 10, prob = 1) after mel
+
+recon loss : pixel L1 loss(0.5) + freq_derivative L1 loss(0.5)
