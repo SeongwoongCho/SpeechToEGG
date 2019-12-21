@@ -110,8 +110,8 @@ normal_noise,musical_noise = load_stft_noise(is_test)
 logging(len(train))
 logging(len(val))
 
-train_dataset = STFTDataset(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
-valid_dataset = STFTDataset(val,n_frame, is_train = False)
+train_dataset = STFTDatasetPHASE(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
+valid_dataset = STFTDatasetPHASE(val,n_frame, is_train = False)
 train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
 valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
 train_loader = data.DataLoader(dataset=train_dataset,
@@ -130,13 +130,13 @@ logging("[!] load data end")
 
 MSE_criterion = nn.MSELoss(reduction='mean')
 BCE_criterion = nn.BCEWithLogitsLoss()
-L1_criterion = nn.L1Loss()
+L1_criterion = nn.L1Loss(reduction='sum')
 
 """
 Define generator/discriminator
 """
 
-model = MMDenseNet(drop_rate=0.25,bn_size=4,k1=10,l1=3,k2=14,l2=4,attention = 'CBAM')
+model = MMDenseNet(indim=2,outdim=2,drop_rate=0.25,bn_size=4,k1=10,l1=3,k2=14,l2=4,attention = 'CBAM')
 if mode == 'ddp':
     model = convert_model(model)  
 model.cuda()
@@ -209,6 +209,8 @@ for epoch in range(start_epoch,n_epoch):
     train_sampler.set_epoch(epoch)
     train_loss = 0.
     train_L1_loss = 0.
+    train_L1_mag_loss = 0.
+    train_L1_phase_loss = 0.
     train_dtime_loss = 0.
     train_dfreq_loss = 0.
     if adversarial:
@@ -224,7 +226,14 @@ for epoch in range(start_epoch,n_epoch):
     for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         x_train,y_train = _x.cuda(),_y.cuda()
         pred = model(x_train)
-
+        
+        pred_mag = pred[:,0,:,:]
+        pred_phase = pred[:,1,:,:]
+        y_train_mag = y_train[:,0,:,:]
+        y_train_phase = y_train[:,1,:,:]
+        
+        y_train_mag[y_train_mag<0]=-11
+        
 #         vgg_input_pred = normalize_batch(pred)
 #         vgg_input_y = normalize_batch(y_train)
 #         pred_feature = vgg(vgg_input_pred)
@@ -233,9 +242,24 @@ for epoch in range(start_epoch,n_epoch):
         
         ## ===================== Train Generator =====================#
         optimizer.zero_grad()
-        L1_loss = L1_criterion(pred,y_train)
-        dfreq_loss = L1_criterion(pred[:,:,1:,:]-pred[:,:,:-1,:],y_train[:,:,1:,:]-y_train[:,:,:-1,:])
-        recon_loss = 0.5*L1_loss + 0.5*dfreq_loss
+        
+        B,F,T = y_train_mag.shape
+        L1_mag_loss = L1_criterion(pred_mag,y_train_mag)/(F*T)
+        
+        mask = torch.ones_like(y_train_mag).type(torch.cuda.FloatTensor)
+        mask[y_train_mag<0]=0
+        
+#         L1_phase_loss_sin = L1_criterion(mask*torch.sin(pred_phase),mask*torch.sin(y_train_phase))/torch.sum(mask)
+#         L1_phase_loss_cos = L1_criterion(mask*torch.cos(pred_phase),mask*torch.cos(y_train_phase))/torch.sum(mask)
+#         L1_phase_loss = L1_phase_loss_sin + L1_phase_loss_cos
+        L1_phase_loss = L1_criterion(mask*pred_phase,mask*y_train_phase)/torch.sum(mask)
+#         L1_phase_loss = L1_criterion(scale*pred_phase,scale*y_train_phase)
+#         dfreq_loss = L1_criterion(pred[:,:,1:,:]-pred[:,:,:-1,:],y_train[:,:,1:,:]-y_train[:,:,:-1,:])
+#         recon_loss = 0.5*L1_loss + 0.5*dfreq_loss
+        recon_loss = L1_mag_loss + L1_phase_loss
+    
+#         print(L1_mag_loss)
+#         print(L1_phase_loss)
         
         if adversarial:
             disc_input_fake = torch.cat([x_train,pred],dim=1)
@@ -284,8 +308,10 @@ for epoch in range(start_epoch,n_epoch):
                 optimizer_d.step()
         
         train_loss += dynamic_loss(gen_loss,mode=='ddp')/len(train_loader)
-        train_L1_loss += dynamic_loss(L1_loss,mode=='ddp')/len(train_loader)
-        train_dfreq_loss += dynamic_loss(dfreq_loss,mode=='ddp')/len(train_loader)
+#         train_L1_loss += dynamic_loss(L1_loss,mode=='ddp')/len(train_loader)
+        train_L1_mag_loss += dynamic_loss(L1_mag_loss,mode=='ddp')/len(train_loader)
+        train_L1_phase_loss += dynamic_loss(L1_phase_loss,mode=='ddp')/len(train_loader)
+#         train_dfreq_loss += dynamic_loss(dfreq_loss,mode=='ddp')/len(train_loader)
         if adversarial:
             train_disc_loss += dynamic_loss(disc_loss,mode=='ddp')/len(train_loader)
             train_disc_accuracy_real += dynamic_loss(disc_accuracy_real,mode=='ddp')/len(train_loader)
@@ -294,6 +320,8 @@ for epoch in range(start_epoch,n_epoch):
 
     val_loss = 0.
     val_L1_loss = 0.
+    val_L1_mag_loss = 0.
+    val_L1_phase_loss = 0.
     val_dtime_loss = 0.
     val_dfreq_loss = 0.
     if adversarial:
@@ -303,8 +331,10 @@ for epoch in range(start_epoch,n_epoch):
         val_gen_accuracy = 0.
     
     saving_image_input = []
-    saving_image_pred = []
-    saving_image_true = []
+    saving_image_pred_mag = []
+    saving_image_true_mag = []
+    saving_image_pred_phase = []
+    saving_image_true_phase = []
     
     model.eval()
     if adversarial:
@@ -315,21 +345,36 @@ for epoch in range(start_epoch,n_epoch):
         
         with torch.no_grad():
             pred = model(x_val)
-
-            ## ===================== Generator ===================== #
-            L1_loss = L1_criterion(pred,y_val)
-            dfreq_loss = L1_criterion(pred[:,:,1:,:]-pred[:,:,:-1,:],y_val[:,:,1:,:]-y_val[:,:,:-1,:])
-            recon_loss = 0.5*L1_loss + 0.5*dfreq_loss
+        
+            pred_mag = pred[:,0,:,:].unsqueeze(1)
+            pred_phase = pred[:,1,:,:].unsqueeze(1)
+            y_val_mag = y_val[:,0,:,:].unsqueeze(1)
+            y_val_phase = y_val[:,1,:,:].unsqueeze(1)
             
-            if adversarial:
-                disc_input_fake = torch.cat([x_val,pred],dim=1)
-                disc_output_fake = discriminator(disc_input_fake)
-                disc_label_real = torch.ones_like(disc_output_fake)
-                B,_,W,H = disc_label_real.shape
-                gen_loss = BCE_criterion(disc_output_fake,disc_label_real) + loss_ratio*recon_loss
-                gen_accuracy = torch.round(torch.sigmoid(disc_output_fake)).eq(disc_label_real).sum().type(torch.cuda.FloatTensor)/(B*W*H) ##얼마나 잘 속이냐
-            else:
-                gen_loss = recon_loss
+            y_val_mag[y_val_mag<0]=-11
+    #         vgg_input_pred = normalize_batch(pred)
+    #         vgg_input_y = normalize_batch(y_train)
+    #         pred_feature = vgg(vgg_input_pred)
+    #         true_feature = vgg(vgg_input_y)
+    #         gram_style = [gram_matrix(y) for y in true_feature]
+
+            ## ===================== Train Generator =====================#
+            optimizer.zero_grad()
+            B,_,F,T = y_val_mag.shape
+            L1_mag_loss = L1_criterion(pred_mag,y_val_mag)/(F*T)
+            mask = torch.ones_like(y_val_mag).type(torch.cuda.FloatTensor)
+            mask[y_val_mag<0]=0
+            
+#             L1_phase_loss_sin = L1_criterion(mask*torch.sin(pred_phase),mask*torch.sin(y_val_phase))/torch.sum(mask)
+#             L1_phase_loss_cos = L1_criterion(mask*torch.cos(pred_phase),mask*torch.cos(y_val_phase))/torch.sum(mask)
+#             L1_phase_loss = L1_phase_loss_sin + L1_phase_loss_cos
+            L1_phase_loss = L1_criterion(mask*pred_phase,mask*y_val_phase)/torch.sum(mask)
+#             L1_phase_loss = L1_criterion(scale*pred_phase,scale*y_val_phase)
+    #         dfreq_loss = L1_criterion(pred[:,:,1:,:]-pred[:,:,:-1,:],y_train[:,:,1:,:]-y_train[:,:,:-1,:])
+    #         recon_loss = 0.5*L1_loss + 0.5*dfreq_loss
+            recon_loss = L1_mag_loss + L1_phase_loss
+
+            
             ## ===================== discriminator ================= #
             if adversarial:
                 disc_input_fake = torch.cat([x_val,pred.detach()],dim=1)
@@ -345,13 +390,17 @@ for epoch in range(start_epoch,n_epoch):
                 disc_accuracy_real = torch.round(torch.sigmoid(disc_output_real)).eq(disc_label_real).sum().type(torch.cuda.FloatTensor)/(B*W*H) 
                 disc_accuracy_fake = torch.round(torch.sigmoid(disc_output_fake)).eq(disc_label_fake).sum().type(torch.cuda.FloatTensor)/(B*W*H)
             
-            saving_image_input.append(x_val)
-            saving_image_pred.append(pred)
-            saving_image_true.append(y_val)
+            saving_image_input.append(x_val[:,0:1,:,:])
+            saving_image_pred_mag.append(pred_mag)
+            saving_image_true_mag.append(y_val_mag)
+            saving_image_pred_phase.append(mask*pred_phase)
+            saving_image_true_phase.append(mask*y_val_phase)
         
         val_loss += dynamic_loss(gen_loss,mode=='ddp')/len(valid_loader)
-        val_L1_loss += dynamic_loss(L1_loss,mode=='ddp')/len(valid_loader)
-        val_dfreq_loss += dynamic_loss(dfreq_loss,mode=='ddp')/len(valid_loader)
+#         val_L1_loss += dynamic_loss(L1_loss,mode=='ddp')/len(valid_loader)
+        val_L1_mag_loss += dynamic_loss(L1_mag_loss,mode=='ddp')/len(valid_loader)
+        val_L1_phase_loss += dynamic_loss(L1_phase_loss,mode=='ddp')/len(valid_loader)
+#         val_dfreq_loss += dynamic_loss(dfreq_loss,mode=='ddp')/len(valid_loader)
         if adversarial:
             val_disc_loss += dynamic_loss(disc_loss,mode=='ddp')/len(valid_loader)
             val_disc_accuracy_real += dynamic_loss(disc_accuracy_real,mode=='ddp')/len(valid_loader)
@@ -368,27 +417,46 @@ for epoch in range(start_epoch,n_epoch):
             torch.save(discriminator.state_dict(), os.path.join(save_path,'discriminator_best_%d.pth'%epoch))
         
         saving_image_input = torch.cat(saving_image_input,dim=0)
-        saving_image_pred = torch.cat(saving_image_pred,dim=0)
-        saving_image_true = torch.cat(saving_image_true,dim=0)
+        saving_image_pred_mag = torch.cat(saving_image_pred_mag,dim=0)
+        saving_image_true_mag = torch.cat(saving_image_true_mag,dim=0)
+        saving_image_pred_phase = torch.cat(saving_image_pred_phase,dim=0)
+        saving_image_true_phase = torch.cat(saving_image_true_phase,dim=0)
+        
+#         saving_image_input_mag = saving_image_input[:,0:1,:,:]
+#         saving_image_pred_mag = saving_image_pred[:,0:1,:,:]
+#         saving_image_true_mag = saving_image_true[:,0:1,:,:]
+#         saving_image_input_phase = saving_image_input[:,1:2,:,:]
+#         saving_image_pred_phase = saving_image_pred[:,1:2,:,:]
+#         saving_image_true_phase = saving_image_true[:,1:2,:,:]
         
         saving_image_input = torch.cat([saving_image_input,saving_image_input,saving_image_input],dim=1)
-        saving_image_pred = torch.cat([saving_image_pred,saving_image_pred,saving_image_pred],dim=1)
-        saving_image_true = torch.cat([saving_image_true,saving_image_true,saving_image_true],dim=1)
+        saving_image_pred_mag = torch.cat([saving_image_pred_mag,saving_image_pred_mag,saving_image_pred_mag],dim=1)
+        saving_image_true_mag = torch.cat([saving_image_true_mag,saving_image_true_mag,saving_image_true_mag],dim=1)
+        saving_image_pred_phase = torch.cat([saving_image_pred_phase,saving_image_pred_phase,saving_image_pred_phase],dim=1)
+        saving_image_true_phase = torch.cat([saving_image_true_phase,saving_image_true_phase,saving_image_true_phase],dim=1)
         
-        saving_image_pred = make_grid(saving_image_pred, normalize=True, scale_each=True)
         saving_image_input = make_grid(saving_image_input, normalize=True, scale_each=True)
-        saving_image_true = make_grid(saving_image_true, normalize=True, scale_each=True)
+        saving_image_pred_mag = make_grid(saving_image_pred_mag, normalize=True, scale_each=True)
+        saving_image_true_mag = make_grid(saving_image_true_mag, normalize=True, scale_each=True)
+        saving_image_pred_phase = make_grid(saving_image_pred_phase, normalize=True, scale_each=True)
+        saving_image_true_phase = make_grid(saving_image_true_phase, normalize=True, scale_each=True)
+        
+        
         if epoch ==0:
-            writer.add_image('img_input/mel', saving_image_input,epoch)
-            writer.add_image('img_true/mel', saving_image_true, epoch)
-        writer.add_image('img_pred/mel', saving_image_pred, epoch)
+            writer.add_image('img_input/stft', saving_image_input,epoch)
+            writer.add_image('img_true_mag/stft', saving_image_true_mag, epoch)
+            writer.add_image('img_true_phase/stft', saving_image_true_phase, epoch)
+        writer.add_image('img_pred_mag/stft', saving_image_pred_mag, epoch)
+        writer.add_image('img_pred_phase/stft', saving_image_pred_phase, epoch)
         
         writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Loss/val',val_loss,epoch)
-        writer.add_scalar('pixel_L1_Loss/train', train_L1_loss, epoch)
-        writer.add_scalar('pixel_L1_Loss/val',val_L1_loss,epoch)
-        writer.add_scalar('derivative Freq_L1_Loss/train', train_dfreq_loss, epoch)
-        writer.add_scalar('derivative Freq_L1_Loss/val',val_dfreq_loss,epoch)
+        writer.add_scalar('pixel_mag_Loss/train', train_L1_mag_loss, epoch)
+        writer.add_scalar('pixel_mag_Loss/val',val_L1_mag_loss,epoch)
+        writer.add_scalar('pixel_phase_Loss/train', train_L1_phase_loss, epoch)
+        writer.add_scalar('pixel_phase_Loss/val',val_L1_phase_loss,epoch)
+#         writer.add_scalar('derivative Freq_L1_Loss/train', train_dfreq_loss, epoch)
+#         writer.add_scalar('derivative Freq_L1_Loss/val',val_dfreq_loss,epoch)
         
         if adversarial:
             if train_discriminator:
@@ -401,10 +469,10 @@ for epoch in range(start_epoch,n_epoch):
             writer.add_scalar('generator_accuracy/train',train_gen_accuracy,epoch)
             writer.add_scalar('generator_accuracy/val',val_gen_accuracy,epoch)
     if adversarial:        
-        logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f train_L1_loss %.6f valid_L1_loss %.6f train_gen_accuracy %.6f val_gen_accuracy %.6f train_disc_loss %.6f valid_disc_loss %.6f train_disc_accuracy_real %.6f valid_disc_accuracy_real %.6f train_disc_accuracy_fake %.6f valid_disc_accuracy_fake %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,train_L1_loss,val_L1_loss,train_gen_accuracy,val_gen_accuracy,train_disc_loss,val_disc_loss,train_disc_accuracy_real,val_disc_accuracy_real, train_disc_accuracy_fake,val_disc_accuracy_fake, time.time()-st))
+        logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f \_loss %.6f valid_L1_loss %.6f train_gen_accuracy %.6f val_gen_accuracy %.6f train_disc_loss %.6f valid_disc_loss %.6f train_disc_accuracy_real %.6f valid_disc_accuracy_real %.6f train_disc_accuracy_fake %.6f valid_disc_accuracy_fake %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,train_L1_loss,val_L1_loss,train_gen_accuracy,val_gen_accuracy,train_disc_loss,val_disc_loss,train_disc_accuracy_real,val_disc_accuracy_real, train_disc_accuracy_fake,val_disc_accuracy_fake, time.time()-st))
     
     else:
-        logging("Epoch [%d]/[%d] train_loss %.6f valid_loss %.6f train_L1_loss %.6f valid_L1_loss %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,train_L1_loss,val_L1_loss,time.time()-st))
+        logging("Epoch [%d]/[%d] train_L1_loss %.6f valid_L1_loss %.6f train_L1_mag_loss %.6f valid_L1_mag_loss %.6f train_L1_phase_loss %.6f valid_L1_phase_loss %.6f duration : %.4f"%(epoch,n_epoch,train_loss,val_loss,train_L1_mag_loss,val_L1_mag_loss,train_L1_phase_loss,val_L1_phase_loss,time.time()-st))
     
     if adversarial:
         if train_discriminator == True and val_disc_loss < 0.4 :

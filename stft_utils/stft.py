@@ -94,7 +94,7 @@ class STFT(torch.nn.Module):
 
         return magnitude, phase
 
-    def inverse(self, magnitude, phase):
+    def inverse(self, magnitude, phase, num_samples):
         """Call the inverse STFT (iSTFT), given magnitude and phase tensors produced 
         by the ```transform``` function.
         
@@ -136,7 +136,7 @@ class STFT(torch.nn.Module):
             inverse_transform *= float(self.filter_length) / self.hop_length
 
         inverse_transform = inverse_transform[..., self.pad_amount:]
-        inverse_transform = inverse_transform[..., :self.num_samples]
+        inverse_transform = inverse_transform[..., :num_samples]
         inverse_transform = inverse_transform.squeeze(1)
 
         return inverse_transform

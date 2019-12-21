@@ -553,7 +553,7 @@ disc loss = (BCE(pred,0) + BCE(true,1))*0.5
 
 # exp 17 : No GAN, modify masking parameter, modify STFT data.., n_frame -> 128
 
--log(clip(mel(S))) 
+- -dynamic_range_compression(mel(S))
 
 lr : 3e-4
 batch_size : 44
@@ -577,3 +577,39 @@ radam + lookahead(k=6,alpha=.5)
 exp 0 augmentation(but, padding -1 with random l,r) +  Time/freq masking(F = 1, T = 1, num_masks = 10, prob = 1) after mel
 
 recon loss : pixel L1 loss(0.5) + freq_derivative L1 loss(0.5)
+
+# exp 18 : add phase reconstruction
+
+mag : dynamic_range_compression(S)
+        mag<0 == -11
+
+phase : phase
+
+lr : 3e-4
+batch_size : 20
+n_frame : 64
+n_epoch : 600
+lr_step : 250
+gamma : 0.1
+beta1 : 0.9
+beta2 : 0.999
+weight_decay :1e-5
+
+==model parameter == 
+Generator : MMDenseNet
+    outdim = 2
+    drop_rate = 0.25
+    bn_size = 4
+    k1,l1 = 10,3
+    k2,l2 = 14,4
+    CBAM attention
+
+radam + lookahead(k=6,alpha=.5)
+exp 0 augmentation(but, padding -1 with random l,r) +  Time/freq masking(F = 5, T = 1, num_masks = 10, prob = 1) after mel
+
+mask = 0 if mag_true < 0 else 1
+
+mag_loss = L1
+phase_loss = L1 * mask/sum(mask)
+
+recon loss : mag_loss + phase_loss

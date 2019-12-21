@@ -135,14 +135,14 @@ class _DenseBlock(nn.Module):
         return torch.cat(features, 1)
         
 class _MDenseNet_STEM(nn.Module):
-    def __init__(self,first_channel=32,first_kernel = (3,3),scale=3,kl = [],drop_rate = 0.1,bn_size=4,attention = None):
+    def __init__(self,indim = 1,first_channel=32,first_kernel = (3,3),scale=3,kl = [],drop_rate = 0.1,bn_size=4,attention = None):
         super(_MDenseNet_STEM,self).__init__()
         self.first_channel = 32
         self.first_kernel = first_kernel
         self.scale = scale
         self.kl = kl
         
-        self.first_conv = nn.Conv2d(1,first_channel,first_kernel)
+        self.first_conv = nn.Conv2d(indim,first_channel,first_kernel)
         self.downsample_layer = nn.MaxPool2d(kernel_size=2,stride=2)
         
         self.upsample_layers = nn.ModuleList()
@@ -199,7 +199,7 @@ class _MDenseNet_STEM(nn.Module):
         return output
     
 class MMDenseNet(nn.Module):
-    def __init__(self,drop_rate = 0.1,bn_size=4,k1=10,l1=3,k2=None,l2=None,attention = None,out_relu = True):
+    def __init__(self,indim = 1,outdim = 1,drop_rate = 0.1,bn_size=4,k1=10,l1=3,k2=None,l2=None,attention = None):
         super(MMDenseNet,self).__init__()
         
         if k2 is None:
@@ -210,18 +210,17 @@ class MMDenseNet(nn.Module):
         kl_low = [(k1,l1)]*7 ## (14,4)
         kl_high = [(k1,l1)]*7 ## (10,3)
         kl_full = [(k2,l2)]*7 ## (6,2)
-        self.lowNet = _MDenseNet_STEM(first_channel=32,first_kernel = (3,3),scale=3,kl = kl_low,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
-        self.highNet = _MDenseNet_STEM(first_channel=32,first_kernel = (3,3),scale=3,kl = kl_high,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
-        self.fullNet = _MDenseNet_STEM(first_channel=32,first_kernel = (4,3),scale=3,kl = kl_full,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
+        self.lowNet = _MDenseNet_STEM(indim=indim,first_channel=32,first_kernel = (3,3),scale=3,kl = kl_low,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
+        self.highNet = _MDenseNet_STEM(indim=indim,first_channel=32,first_kernel = (3,3),scale=3,kl = kl_high,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
+        self.fullNet = _MDenseNet_STEM(indim=indim,first_channel=32,first_kernel = (4,3),scale=3,kl = kl_full,drop_rate = drop_rate,bn_size=bn_size,attention = attention)
         
         last_channel = self.lowNet.channels[-1] + self.fullNet.channels[-1]
         self.out = nn.Sequential(
             _DenseBlock( 
                 2, last_channel, bn_size, 4, drop_rate),
             nn.ReLU(),
-            nn.Conv2d(last_channel+8,1,1),
+            nn.Conv2d(last_channel+8,outdim,1),
 #             nn.Tanh()
-            nn.ReLU() if out_relu else nn.Sigmoid()
         )
         
     def forward(self,input):
@@ -233,6 +232,9 @@ class MMDenseNet(nn.Module):
         full_output = self.fullNet(input)
         output = torch.cat([output,full_output],1) ## Channel 방향
         output = self.out(output)
+        
+        if output.shape[1] == 2:
+            output[:,1,:,:] = torch.clamp(output[:,1,:,:].clone(),-np.pi,np.pi)
         
         return output
 
