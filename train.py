@@ -20,7 +20,7 @@ from stft_utils.stft import STFT
 from utils.utils import *
 from dataloader import *
 
-from efficientunet.efficientunet import *
+from efficientunet import *
 
 import apex
 from apex import amp
