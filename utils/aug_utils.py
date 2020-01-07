@@ -2,7 +2,7 @@ from utils.utils import seed_everything
 import numpy as np
 import random
 import torch
-from SpecAug.sparse_image_warp_pytorch import sparse_image_warp
+# from SpecAug.sparse_image_warp_pytorch import sparse_image_warp
 
 seed_everything(42)
 
@@ -15,24 +15,24 @@ def mix_db(x,y,db):
     
     return lam*x + (1-lam)*y
 
-def time_warp(spec, W=5):
-    num_rows = spec.shape[1] ##F
-    spec_len = spec.shape[2] ##T
+# def time_warp(spec, W=5):
+#     num_rows = spec.shape[1] ##F
+#     spec_len = spec.shape[2] ##T
 
-    y = num_rows // 2
-    horizontal_line_at_ctr = spec[0][y]
-    # assert len(horizontal_line_at_ctr) == spec_len
+#     y = num_rows // 2
+#     horizontal_line_at_ctr = spec[0][y]
+#     # assert len(horizontal_line_at_ctr) == spec_len
 
-    point_to_warp = horizontal_line_at_ctr[random.randrange(W, spec_len-W)]
-    # assert isinstance(point_to_warp, torch.Tensor)
+#     point_to_warp = horizontal_line_at_ctr[random.randrange(W, spec_len-W)]
+#     # assert isinstance(point_to_warp, torch.Tensor)
 
-    # Uniform distribution from (0,W) with chance to be up to W negative
-    dist_to_warp = random.randrange(-W, W)
+#     # Uniform distribution from (0,W) with chance to be up to W negative
+#     dist_to_warp = random.randrange(-W, W)
     
-    src_pts = torch.tensor([[[y, point_to_warp]]])
-    dest_pts = torch.tensor([[[y, point_to_warp + dist_to_warp]]])
-    warped_spectro, dense_flows = sparse_image_warp(spec, src_pts, dest_pts)
-    return warped_spectro, dense_flows
+#     src_pts = torch.tensor([[[y, point_to_warp]]])
+#     dest_pts = torch.tensor([[[y, point_to_warp + dist_to_warp]]])
+#     warped_spectro, dense_flows = sparse_image_warp(spec, src_pts, dest_pts)
+#     return warped_spectro, dense_flows
 
 def spec_masking(spec, F = 15, T = 10, num_masks = 1, prob = 0.7, replace_with_zero = True):
     def _freq_mask(spec, F=F, num_masks=num_masks, replace_with_zero=replace_with_zero):
