@@ -135,3 +135,26 @@ loss = L2(mask loss + mag loss + phase loss)
 --lr 3e-4
 --reduce LR on Plateau(optimizer, mode='min', factor=0.1, patience=100, verbose=True) watch valid loss
 --n_frame 64
+
+# exp 9 : SSL Method - Mean Teacher 
+
+DataSet Size
+- Train : 16089
+- Valid : 12560
+- Unlabeled : 646834
+
+EfficientUnet b2 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
+
+loss = supervised_loss + consistency loss
+
+supervised_loss -> L1
+consistency loss -> L1
+
+--consistency weight 10 
+--ema_decay 0.999
+
+--batch_size 384
+--epoch 50
+--lr 3e-4
+--CosineAnnealingLR
+--n_frame 64

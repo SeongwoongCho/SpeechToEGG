@@ -13,7 +13,6 @@ def load_stft_unlabel_datas_path(is_test = False):
     TrainPath = '../eggdata/TrainSTFT/unlabeled/'
     Train = []
     
-    
     for dataset in os.listdir(TrainPath):
         for file in os.listdir(TrainPath + dataset):
             if 'npy' in file:
@@ -100,7 +99,7 @@ class Dataset(torch.utils.data.Dataset):
 class SSLDataset(torch.utils.data.Dataset):
     def __init__(self,X,unlabel,n_frame,is_train = True,normal_noise = None,musical_noise=None,aug=None):
         self.data = X
-        self.unlabel = X_unlabel
+        self.unlabel = unlabel
         self.n_frame = n_frame
         self.is_train = is_train
         self.normal_noise = normal_noise
@@ -128,7 +127,6 @@ class SSLDataset(torch.utils.data.Dataset):
                 X = self.unlabel[len(self.data) - idx]
                 Y = self.UNLABEL(X)
             labeled = 0
-                
         ### random crop
         T = X.shape[1]
         if T<self.n_frame:
@@ -140,7 +138,6 @@ class SSLDataset(torch.utils.data.Dataset):
             pi = np.random.randint(T-self.n_frame)
             X = X[:,pi:pi+self.n_frame]
             Y = Y[:,pi:pi+self.n_frame]
-        
         # Mixing before mel
         if self.aug:
             X1 = self.aug(X,self.normal_noise,self.musical_noise)
@@ -155,6 +152,5 @@ class SSLDataset(torch.utils.data.Dataset):
             X1 = spec_masking(X1, F = 5, T = 1, num_masks = 10, prob = 1, replace_with_zero = True)
             X2 = add_whitenoise(X2)
             X2 = spec_masking(X2, F = 5, T = 1, num_masks = 10, prob = 1, replace_with_zero = True)
-        
         return (X1,X2),Y, labeled
     

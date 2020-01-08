@@ -111,8 +111,8 @@ class STFT(torch.nn.Module):
         recombine_magnitude_phase = torch.cat(
             [magnitude*torch.cos(phase), magnitude*torch.sin(phase)], dim=1)
         
-#         print("recombine :",recombine_magnitude_phase.dtype)
-        
+#         print("recombine :",recombine_magnitude_phase.dtype, recombine_magnitude_phase.shape)
+    
         inverse_transform = F.conv_transpose1d(
             recombine_magnitude_phase,
             self.inverse_basis,
