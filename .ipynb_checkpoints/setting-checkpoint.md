@@ -133,15 +133,21 @@ loss = L2(mask loss + mag loss + phase loss)
 --batch_size 600
 --epoch 15000
 --lr 3e-4
---reduce LR on Plateau(optimizer, mode='min', factor=0.1, patience=100, verbose=True) watch valid loss
+--reduce LR on Plateau(optimizer, mode='min', factor=0.1, patience=500, verbose=True) watch valid metric
 --n_frame 64
 
 # exp 9 : SSL Method - Mean Teacher 
 
+pretrained model : 6-re 5761
+
 DataSet Size
 - Train : 16089
 - Valid : 12560
-- Unlabeled : 646834
+- Unlabeled : '725202
+  - DSD100, KSS, zeroth_korean, speech_ko
+  - 일단은 librispeech 빼고 진행(librispeech 포함하면 '3845087개 )
+
+remove masking augmentation
 
 EfficientUnet b2 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
 
@@ -150,11 +156,60 @@ loss = supervised_loss + consistency loss
 supervised_loss -> L1
 consistency loss -> L1
 
---consistency weight 10 
+--consistency weight 100
 --ema_decay 0.999
-
 --batch_size 384
---epoch 50
+--epoch 120
 --lr 3e-4
 --CosineAnnealingLR
 --n_frame 64
+
+2000iter/40min 정도 --> 1iter/1s 정도 예상 cache에 다올라간 후엔 시간이 거의 걸리지 않음.
+
+# exp 10 : Change consistency weight 100 -> 1, reduce epoch -> 70
+
+pretrained model : 6-re 5761
+
+DataSet Size
+- Train : 16089
+- Valid : 12560
+- Unlabeled : '725202
+  - DSD100, KSS, zeroth_korean, speech_ko
+  - 일단은 librispeech 빼고 진행(librispeech 포함하면 '3845087개 )
+
+EfficientUnet b2 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
+
+loss = supervised_loss + consistency loss
+
+supervised_loss -> L1
+consistency loss -> L1
+
+--consistency weight 1
+--ema_decay 0.999
+--batch_size 384
+--epoch 70
+--lr 3e-4
+--CosineAnnealingLR
+--n_frame 64
+
+##### EXP 9,10 Mean Teacher model 은 나중에 재시도 .
+##### HDD Read 속도 때문인 것 같다 ....  ㅅㅂ ㅅㅂ !!!!!!!!!!!
+
+# exp 12 : exp6-re --> RAdamW + CosineAnnealing data loading 방식 변경
+
+EfficientUnet b2 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
+
+한 파일에 저장후 mmap 으로 읽는다. 
+
+train : (2, 257, '3261590)
+valid : (2, 257, '2567915)
+
+loss = mask loss + mag loss + phase loss
+
+--batch_size 768
+--epoch 600
+--lr 3e-4
+--CosineAnnealing(optimizer)
+--n_frame 64
+
+stride = 16

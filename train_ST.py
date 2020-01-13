@@ -10,11 +10,11 @@ from tqdm import tqdm
 import torch
 from torch import nn
 from torch.utils import data
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 
-from utils.radam import RAdam,Lookahead,AdamW
+from utils.radam import RAdam,Lookahead, AdamW
 from utils.aug_utils import custom_stft_aug
 from utils.stft_utils.stft import STFT
 from utils.utils import *
@@ -36,6 +36,8 @@ parser.add_argument('--weight_decay',type=float,default = 1e-5)
 parser.add_argument('--lr', type=float, default = 3e-4)
 parser.add_argument('--exp_num',type=str,default='0')
 parser.add_argument('--n_frame',type=int,default=64)
+parser.add_argument('--scheduler_gamma',type=float,default=0.1)
+parser.add_argument('--pretrained',type=str,default = '6-re-5761')
 parser.add_argument('--local_rank',type=int,default=0)
 parser.add_argument('--test',action='store_true')
 parser.add_argument('--ddp',action='store_true')
@@ -59,6 +61,9 @@ n_frame = args.n_frame
 ##optimizer parameters##
 learning_rate = args.lr
 
+##scheduler parameters##
+scheduler_gamma = args.scheduler_gamma
+
 ##saving path
 save_path = './models/masked/exp{}/'.format(args.exp_num)
 os.makedirs(save_path,exist_ok=True)
@@ -78,14 +83,13 @@ logging = print_verbose(verbose)
 logging("[*] load data ...")
 
 st = time.time()
-train = np.load('../eggdata/TrainSTFT/train_data_full.npy',mmap_mode='r')
-val = np.load('../eggdata/TrainSTFT/valid_data_full.npy',mmap_mode='r')
+train,val = load_stft_datas_path(is_test,pseudo = args.pretrained)
 normal_noise,musical_noise = load_stft_noise(is_test)
 
-logging(train.shape)
-logging(val.shape)
+logging(len(train))
+logging(len(val))
 
-train_dataset = Dataset(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
+train_dataset = STDataset(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
 valid_dataset = Dataset(val,n_frame, is_train = False)
 train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
 valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
@@ -94,13 +98,12 @@ train_loader = data.DataLoader(dataset=train_dataset,
                                num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
                                sampler = train_sampler if ddp else None,
                                shuffle = True if not ddp else False,
-                               pin_memory=True)
+                               pin_memory= True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
                                num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
                                sampler = valid_sampler if ddp else None,
-                               pin_memory=True)
-
+                               pin_memory= True)
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
@@ -113,20 +116,28 @@ cosine_distance_criterion = CosineDistanceLoss()
 model definition
 """
 
+# model = MMDenseNet(indim=2,outdim=2,drop_rate=0.25,bn_size=4,k1=10,l1=3,k2=14,l2=4,attention = 'CBAM')
 model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False)
+# if ddp:
+#     model = convert_model(model)
 model.cuda()
 
-optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+# logging(model)
+
+# optimizer = RAdam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
 optimizer = Lookahead(optimizer,alpha=0.5,k=6)
 if mixed:
     model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 
-scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
+# scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
+# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)
 
 if ddp:
     model = torch.nn.parallel.DistributedDataParallel(model,
                                                       device_ids=[args.local_rank],
                                                       output_device=0)
+#     model = DDP(model,delay_allreduce=True)
 else:
     model = torch.nn.DataParallel(model)
 
@@ -156,8 +167,11 @@ for epoch in range(n_epoch):
             
     model.train()
     
-    for idx,(_x,_y) in enumerate(tqdm(train_loader,disable=(verbose==0))):
+    for idx,(_x,_y,pseudo) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         x_train,y_train = _x.cuda(),_y.cuda()
+        
+        real = (pseudo == 0)
+        pseudo = (pseudo == 1) 
         
         B,_,F,T = x_train.shape
         
@@ -172,12 +186,19 @@ for epoch in range(n_epoch):
         
         optimizer.zero_grad()
         
-        mask_loss = BCE_criterion(pred_mask,y_train_mask)
-        mag_loss = L1_criterion(y_train_mask*pred_mag,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
-        phase_loss = L1_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
+        ## pseudo loss
+        mask_loss = BCE_criterion(pred_mask[pseudo],y_train_mask[pseudo])
+        mag_loss = L1_criterion(y_train_mask[pseudo]*pred_mag[pseudo],y_train_mask[pseudo]*y_train_mag[pseudo])/(torch.sum(y_train_mask[pseudo]) + 1e-5)
+        phase_loss = L1_criterion(y_train_mask[pseudo]*pred_phase[pseudo],y_train_mask[pseudo]*y_train_phase[pseudo])/(torch.sum(y_train_mask[pseudo]) + 1e-5)
+        
+        ## real loss
+        if real.sum().item() > 0:
+            mask_loss += BCE_criterion(pred_mask[real],y_train_mask[real])
+            mag_loss += L1_criterion(y_train_mask[real]*pred_mag[real],y_train_mask[real]*y_train_mag[real])/(torch.sum(y_train_mask[real]) + 1e-5)
+            phase_loss += L1_criterion(y_train_mask[real]*pred_phase[real],y_train_mask[real]*y_train_phase[real])/(torch.sum(y_train_mask[real]) + 1e-5)
         
         loss = mask_loss + mag_loss + phase_loss
-        
+            
         if mixed:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -203,7 +224,7 @@ for epoch in range(n_epoch):
         pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
         y_train_signal_recon = stftTool.inverse(y_train_mask*torch.exp(y_train_mag),y_train_phase,n_frame*128)
         signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_train_signal_recon[:,30:-30])
-
+        
         train_loss += dynamic_loss(loss,ddp)/len(train_loader)
         train_mask_loss += dynamic_loss(mask_loss,ddp)/len(train_loader)
         train_mag_loss += dynamic_loss(mag_loss,ddp)/len(train_loader)
@@ -279,48 +300,48 @@ for epoch in range(n_epoch):
             y_val_signal_recon = stftTool.inverse(y_val_mask*torch.exp(y_val_mag),y_val_phase,n_frame*128)
             signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_val_signal_recon[:,30:-30])
         
-            val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
-            val_mask_loss += dynamic_loss(mask_loss,ddp)/len(valid_loader)
-            val_mag_loss += dynamic_loss(mag_loss,ddp)/len(valid_loader)
-            val_phase_loss += dynamic_loss(phase_loss,ddp)/len(valid_loader)
-            val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
-            val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
-            val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
-            val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
-
-    scheduler.step()
+        val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
+        val_mask_loss += dynamic_loss(mask_loss,ddp)/len(valid_loader)
+        val_mag_loss += dynamic_loss(mag_loss,ddp)/len(valid_loader)
+        val_phase_loss += dynamic_loss(phase_loss,ddp)/len(valid_loader)
+        val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
+        val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
+        val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
+        val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
+        
+#     scheduler.step(val_loss)
+    scheduler.step(val_signal_distance)
     
     if verbose and not is_test:
         torch.save(model.module.state_dict(), os.path.join(save_path,'best_%d.pth'%epoch))
-        
-        if epoch%5 == 0:
-            saving_image_pred_mask = torch.cat(saving_image_pred_mask,dim=0)
-            saving_image_true_mask = torch.cat(saving_image_true_mask,dim=0)
-            saving_image_pred_mag = torch.cat(saving_image_pred_mag,dim=0)
-            saving_image_true_mag = torch.cat(saving_image_true_mag,dim=0)
-            saving_image_pred_phase = torch.cat(saving_image_pred_phase,dim=0)
-            saving_image_true_phase = torch.cat(saving_image_true_phase,dim=0)
 
-            saving_image_pred_mask = torch.cat([saving_image_pred_mask,saving_image_pred_mask,saving_image_pred_mask],dim=1)
-            saving_image_true_mask = torch.cat([saving_image_true_mask,saving_image_true_mask,saving_image_true_mask],dim=1)
-            saving_image_pred_mag = torch.cat([saving_image_pred_mag,saving_image_pred_mag,saving_image_pred_mag],dim=1)
-            saving_image_true_mag = torch.cat([saving_image_true_mag,saving_image_true_mag,saving_image_true_mag],dim=1)
-            saving_image_pred_phase = torch.cat([saving_image_pred_phase,saving_image_pred_phase,saving_image_pred_phase],dim=1)
-            saving_image_true_phase = torch.cat([saving_image_true_phase,saving_image_true_phase,saving_image_true_phase],dim=1)
+        saving_image_pred_mask = torch.cat(saving_image_pred_mask,dim=0)
+        saving_image_true_mask = torch.cat(saving_image_true_mask,dim=0)
+        saving_image_pred_mag = torch.cat(saving_image_pred_mag,dim=0)
+        saving_image_true_mag = torch.cat(saving_image_true_mag,dim=0)
+        saving_image_pred_phase = torch.cat(saving_image_pred_phase,dim=0)
+        saving_image_true_phase = torch.cat(saving_image_true_phase,dim=0)
 
-            saving_image_pred_mask = make_grid(saving_image_pred_mask, normalize=True, scale_each=True)
-            saving_image_true_mask = make_grid(saving_image_true_mask, normalize=True, scale_each=True)
-            saving_image_pred_mag = make_grid(saving_image_pred_mag, normalize=True, scale_each=True)
-            saving_image_true_mag = make_grid(saving_image_true_mag, normalize=True, scale_each=True)
-            saving_image_pred_phase = make_grid(saving_image_pred_phase, normalize=True, scale_each=True)
-            saving_image_true_phase = make_grid(saving_image_true_phase, normalize=True, scale_each=True)
+        saving_image_pred_mask = torch.cat([saving_image_pred_mask,saving_image_pred_mask,saving_image_pred_mask],dim=1)
+        saving_image_true_mask = torch.cat([saving_image_true_mask,saving_image_true_mask,saving_image_true_mask],dim=1)
+        saving_image_pred_mag = torch.cat([saving_image_pred_mag,saving_image_pred_mag,saving_image_pred_mag],dim=1)
+        saving_image_true_mag = torch.cat([saving_image_true_mag,saving_image_true_mag,saving_image_true_mag],dim=1)
+        saving_image_pred_phase = torch.cat([saving_image_pred_phase,saving_image_pred_phase,saving_image_pred_phase],dim=1)
+        saving_image_true_phase = torch.cat([saving_image_true_phase,saving_image_true_phase,saving_image_true_phase],dim=1)
 
-            writer.add_image('img_true_mag/stft', saving_image_true_mag, epoch)
-            writer.add_image('img_true_phase/stft', saving_image_true_phase, epoch)
-            writer.add_image('img_true_mask/stft', saving_image_true_mask, epoch)
-            writer.add_image('img_pred_mag/stft', saving_image_pred_mag, epoch)
-            writer.add_image('img_pred_phase/stft', saving_image_pred_phase, epoch)
-            writer.add_image('img_pred_mask/stft', saving_image_pred_mask, epoch)
+        saving_image_pred_mask = make_grid(saving_image_pred_mask, normalize=True, scale_each=True)
+        saving_image_true_mask = make_grid(saving_image_true_mask, normalize=True, scale_each=True)
+        saving_image_pred_mag = make_grid(saving_image_pred_mag, normalize=True, scale_each=True)
+        saving_image_true_mag = make_grid(saving_image_true_mag, normalize=True, scale_each=True)
+        saving_image_pred_phase = make_grid(saving_image_pred_phase, normalize=True, scale_each=True)
+        saving_image_true_phase = make_grid(saving_image_true_phase, normalize=True, scale_each=True)
+
+        writer.add_image('img_true_mag/stft', saving_image_true_mag, epoch)
+        writer.add_image('img_true_phase/stft', saving_image_true_phase, epoch)
+        writer.add_image('img_true_mask/stft', saving_image_true_mask, epoch)
+        writer.add_image('img_pred_mag/stft', saving_image_pred_mag, epoch)
+        writer.add_image('img_pred_phase/stft', saving_image_pred_phase, epoch)
+        writer.add_image('img_pred_mask/stft', saving_image_pred_mask, epoch)
 
         writer.add_scalar('total_loss/train', train_loss, epoch)
         writer.add_scalar('total_loss/val',val_loss,epoch)

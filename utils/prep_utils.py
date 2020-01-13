@@ -50,12 +50,14 @@ def dynamic_range_compression(x, C=1, clip_val=1e-5):
     """
     return np.log(np.maximum(x,clip_val) * C)
 
-def dynamic_range_decompression(x, C=1):
+def dynamic_range_decompression(x, C=1, torch_mode=False):
     """
     PARAMS
     ------
     C: compression factor used to compress
     """
+    if torch_mode:
+        return torch.exp(x) / C
     return np.exp(x) / C
 
 def stft_to_mel(stft):
@@ -64,27 +66,44 @@ def stft_to_mel(stft):
     yS = -dynamic_range_compression(yS)
     return yS
 
-def stft_process(stft,mask=False):
-    mag = np.abs(stft)
-    phase = np.angle(stft)
-    
-    mag = dynamic_range_compression(mag)
-#     phase = unwrap(phase)
-    mag = mag[np.newaxis,:,:]
-    phase = phase[np.newaxis,:,:]
-    
-    if mask:
-        m = make_mask(mag)
-        conc = np.concatenate([mag,phase,m],axis=0)
+def stft_process(stft,mask=False,torch_mode=False):
+    if torch_mode:
+        mag = torch.Tensor(np.abs(stft)).unsqueeze(0).cuda()
+        phase = torch.Tensor(np.angle(stft)).unsqueeze(0).cuda()
+        
+        mag = dynamic_range_compressions(mag,torch_mode=True)
+        
+        if mask:
+            m = make_mask(mag,torch_mode)
+            conc = torch.cat([mag,phase,m],dim=0)
+        else:
+            conc = torch.cat([mag,phase],dim=0)
     else:
-        conc = np.concatenate([mag,phase],axis=0)
+        mag = np.abs(stft)
+        phase = np.angle(stft)
+
+        mag = dynamic_range_compression(mag)
+    #     phase = unwrap(phase)
+        mag = mag[np.newaxis,:,:]
+        phase = phase[np.newaxis,:,:]
+
+        if mask:
+            m = make_mask(mag)
+            conc = np.concatenate([mag,phase,m],axis=0)
+        else:
+            conc = np.concatenate([mag,phase],axis=0)
     return conc
 
-def make_mask(mag):
-    mask = np.zeros_like(mag)
-    m = mag.mean()
-    s = mag.std()
-#     print(m,s)
+def make_mask(mag,torch_mode=False):
+    if torch_mode:
+        mask = torch.zeros_like(mag)
+        m = torch.mean(mag)
+        s = torch.std(mag)
+    else:
+        mask = np.zeros_like(mag)
+        m = mag.mean()
+        s = mag.std()
+        
     mask[mag>m + 1*s] = 1
     return mask
 

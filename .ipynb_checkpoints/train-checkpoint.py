@@ -10,11 +10,11 @@ from tqdm import tqdm
 import torch
 from torch import nn
 from torch.utils import data
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 
-from utils.radam import RAdam,Lookahead
+from utils.radam import RAdam,Lookahead,AdamW
 from utils.aug_utils import custom_stft_aug
 from utils.stft_utils.stft import STFT
 from utils.utils import *
@@ -36,7 +36,6 @@ parser.add_argument('--weight_decay',type=float,default = 1e-5)
 parser.add_argument('--lr', type=float, default = 3e-4)
 parser.add_argument('--exp_num',type=str,default='0')
 parser.add_argument('--n_frame',type=int,default=64)
-parser.add_argument('--scheduler_gamma',type=float,default=0.1)
 parser.add_argument('--local_rank',type=int,default=0)
 parser.add_argument('--test',action='store_true')
 parser.add_argument('--ddp',action='store_true')
@@ -60,9 +59,6 @@ n_frame = args.n_frame
 ##optimizer parameters##
 learning_rate = args.lr
 
-##scheduler parameters##
-scheduler_gamma = args.scheduler_gamma
-
 ##saving path
 save_path = './models/masked/exp{}/'.format(args.exp_num)
 os.makedirs(save_path,exist_ok=True)
@@ -82,11 +78,12 @@ logging = print_verbose(verbose)
 logging("[*] load data ...")
 
 st = time.time()
-train,val = load_stft_datas_path(is_test)
+train = np.load('../eggdata/TrainSTFT/train_data_full.npy',mmap_mode='r')
+val = np.load('../eggdata/TrainSTFT/valid_data_full.npy',mmap_mode='r')
 normal_noise,musical_noise = load_stft_noise(is_test)
 
-logging(len(train))
-logging(len(val))
+logging(train.shape)
+logging(val.shape)
 
 train_dataset = Dataset(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
 valid_dataset = Dataset(val,n_frame, is_train = False)
@@ -103,6 +100,7 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
                                num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
                                sampler = valid_sampler if ddp else None,
                                pin_memory=True)
+
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
@@ -115,21 +113,15 @@ cosine_distance_criterion = CosineDistanceLoss()
 model definition
 """
 
-# model = MMDenseNet(indim=2,outdim=2,drop_rate=0.25,bn_size=4,k1=10,l1=3,k2=14,l2=4,attention = 'CBAM')
 model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False)
-# if ddp:
-#     model = convert_model(model)
 model.cuda()
 
-# logging(model)
-
-optimizer = RAdam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 optimizer = Lookahead(optimizer,alpha=0.5,k=6)
 if mixed:
     model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 
-# scheduler = StepLR(optimizer,step_size=step_size,gamma = scheduler_gamma)
-scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=500, verbose=True)
+scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
 
 if ddp:
     model = torch.nn.parallel.DistributedDataParallel(model,
@@ -138,8 +130,6 @@ if ddp:
 else:
     model = torch.nn.DataParallel(model)
 
-# model.load_state_dict(torch.load('./models/masked/exp6/best_1682.pth'))    
-    
 stftTool = STFT(filter_length=512, hop_length=128,window='hann').cuda()
 """
 Training
@@ -183,11 +173,9 @@ for epoch in range(n_epoch):
         optimizer.zero_grad()
         
         mask_loss = BCE_criterion(pred_mask,y_train_mask)
-#         mag_loss = L2_criterion(pred_mag,y_train_mag)/(B*F*T)
-        mag_loss = L2_criterion(y_train_mask*pred_mag,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
-        phase_loss = L2_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
-#         phase_loss = L2_criterion(pred_phase,y_train_phase)/(B*F*T)
-
+        mag_loss = L1_criterion(y_train_mask*pred_mag,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
+        phase_loss = L1_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
+        
         loss = mask_loss + mag_loss + phase_loss
         
         if mixed:
@@ -214,17 +202,7 @@ for epoch in range(n_epoch):
         
         pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
         y_train_signal_recon = stftTool.inverse(y_train_mask*torch.exp(y_train_mag),y_train_phase,n_frame*128)
-        
-#         signal_distance = torch.abs(pred_signal_recon - y_train_signal_recon)
-#         signal_distance = torch.mean(signal_distance)
         signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_train_signal_recon[:,30:-30])
-    
-#         if mixed:
-#             with amp.scale_loss(signal_distance, optimizer) as scaled_loss:
-#                 scaled_loss.backward()
-#         else:
-#             loss.backward()
-#         optimizer.step()
 
         train_loss += dynamic_loss(loss,ddp)/len(train_loader)
         train_mask_loss += dynamic_loss(mask_loss,ddp)/len(train_loader)
@@ -270,10 +248,8 @@ for epoch in range(n_epoch):
             y_val_mask = y_val[:,2,:,:].unsqueeze(1)
 
             mask_loss = BCE_criterion(pred_mask,y_val_mask)
-    #         mag_loss = L2_criterion(pred_mag,y_val_mag)/(B*F*T)
-            mag_loss = L2_criterion(y_val_mask*pred_mag,y_val_mask*y_val_mag)/(torch.sum(y_val_mask) + 1e-5)
-            phase_loss = L2_criterion(y_val_mask*pred_phase,y_val_mask*y_val_phase)/(torch.sum(y_val_mask) + 1e-5)
-    #         phase_loss = L2_criterion(pred_phase,y_val_phase)/(B*F*T)
+            mag_loss = L1_criterion(y_val_mask*pred_mag,y_val_mask*y_val_mag)/(torch.sum(y_val_mask) + 1e-5)
+            phase_loss = L1_criterion(y_val_mask*pred_phase,y_val_mask*y_val_phase)/(torch.sum(y_val_mask) + 1e-5)
             loss = mask_loss + mag_loss + phase_loss
         
             zero_mask = torch.zeros_like(pred_mask)
@@ -301,27 +277,23 @@ for epoch in range(n_epoch):
 
             pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
             y_val_signal_recon = stftTool.inverse(y_val_mask*torch.exp(y_val_mag),y_val_phase,n_frame*128)
-
-    #         signal_distance = torch.abs(pred_signal_recon - y_val_signal_recon)
-    #         signal_distance = torch.mean(signal_distance)
             signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_val_signal_recon[:,30:-30])
         
-        val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
-        val_mask_loss += dynamic_loss(mask_loss,ddp)/len(valid_loader)
-        val_mag_loss += dynamic_loss(mag_loss,ddp)/len(valid_loader)
-        val_phase_loss += dynamic_loss(phase_loss,ddp)/len(valid_loader)
-        val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
-        val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
-        val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
-        val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
-        
-#     scheduler.step(val_loss)
-    scheduler.step(val_signal_distance)
+            val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
+            val_mask_loss += dynamic_loss(mask_loss,ddp)/len(valid_loader)
+            val_mag_loss += dynamic_loss(mag_loss,ddp)/len(valid_loader)
+            val_phase_loss += dynamic_loss(phase_loss,ddp)/len(valid_loader)
+            val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
+            val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
+            val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
+            val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
+
+    scheduler.step()
     
     if verbose and not is_test:
         torch.save(model.module.state_dict(), os.path.join(save_path,'best_%d.pth'%epoch))
         
-        if epoch%50 == 0:
+        if epoch%5 == 0:
             saving_image_pred_mask = torch.cat(saving_image_pred_mask,dim=0)
             saving_image_true_mask = torch.cat(saving_image_true_mask,dim=0)
             saving_image_pred_mag = torch.cat(saving_image_pred_mag,dim=0)

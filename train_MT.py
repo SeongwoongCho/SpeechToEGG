@@ -22,16 +22,20 @@ from utils.loss_utils import CosineDistanceLoss
 
 from dataloader import *
 from efficientunet import *
+from efficientunet.layers import BatchNorm2d,BatchNorm2dSync
 
 import apex
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
 # from utils.sync_batchnorm import convert_model
 
+# from gpuinfo import GPUInfo
+
 seed_everything(42)
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default = 8192)
-parser.add_argument('--consistency_weight', type=float, default = 10)
+parser.add_argument('--consistency_weight', type=float, default = 100)
+parser.add_argument('--consistency_rampup', type=int, default = 5)
 parser.add_argument('--ema_decay',type=float,default = 0.999)
 parser.add_argument('--epoch',type=int, default = 100)
 parser.add_argument('--weight_decay',type=float,default = 1e-5)
@@ -56,6 +60,7 @@ n_epoch = args.epoch if not is_test else 1
 batch_size = args.batch_size//4 if ddp else args.batch_size
 weight_decay = args.weight_decay
 init_consistency_weight = args.consistency_weight
+consistency_rampup = args.consistency_rampup
 ema_decay = args.ema_decay
 
 ##data preprocessing parameters##
@@ -86,28 +91,31 @@ logging("[*] load data ...")
 global_step = 0
 
 def create_model_optimizer(ema=False):
-    model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False)
-    model.load_state_dict(torch.load('./models/masked/exp6-re/best_5761.pth')) 
+    if ema:
+        model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False, bn = BatchNorm2d)
+    else:
+        model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False, bn = BatchNorm2dSync)
+    model.load_state_dict(torch.load('./models/masked/exp6-re/best_5761.pth',map_location=lambda storage, loc: storage))
     model.cuda()
+
     if ema:
         optimizer = None
+        for param in model.parameters():
+            param.requires_grad = False
+            param.detach_()
     else:
         optimizer = RAdam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         optimizer = Lookahead(optimizer,alpha=0.5,k=6)
         if mixed:
             model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
-    
-    if ddp:
-         model = torch.nn.parallel.DistributedDataParallel(model,
-                                                           device_ids=[args.local_rank],
-                                                           output_device=0)
-    else:
-        model = torch.nn.DataParallel(model)
-    
-    if ema:
-        for param in model.parameters():
-            param.detach_()
-    
+
+        if ddp:
+            model = torch.nn.parallel.DistributedDataParallel(model,
+                                                              device_ids=[args.local_rank],
+                                                            output_device=0)
+        else:
+            model = torch.nn.DataParallel(model)
+
     return model,optimizer
 
 def validate(model,ema_model,sampler,loader,epoch,stftTool):
@@ -177,7 +185,7 @@ def validate(model,ema_model,sampler,loader,epoch,stftTool):
         
 st = time.time()
 train,val = load_stft_datas_path(is_test)
-unlabel = load_stft_unlabel_datas_path(is_test)[:50000]
+unlabel = load_stft_unlabel_datas_path(is_test)
 normal_noise,musical_noise = load_stft_noise(is_test)
 
 logging(len(train))
@@ -193,15 +201,17 @@ else:
     valid_sampler = None
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers = mp.cpu_count()//4 if ddp else mp.cpu_count(),
+#                                num_workers = mp.cpu_count(),
                                sampler = train_sampler if ddp else None,
                                shuffle = True if not ddp else False,
-                               pin_memory=True)
+                               pin_memory=False)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers = mp.cpu_count()//4 if ddp else mp.cpu_count(),
+#                                num_workers = mp.cpu_count(),
                                sampler = valid_sampler if ddp else None,
-                               pin_memory=True)
+                               pin_memory=False)
 
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
@@ -215,7 +225,7 @@ cosine_distance_criterion = CosineDistanceLoss()
 ########################    MODEL DEFINITION   ############################
 model,optimizer = create_model_optimizer()
 ema_model,_ = create_model_optimizer(ema=True)
-# ema_model = None
+
 scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
 stftTool = STFT(filter_length=512, hop_length=128,window='hann').cuda()
 
@@ -243,11 +253,10 @@ for epoch in range(n_epoch):
     consistency_mag_loss = 0.
     consistency_phase_loss = 0.
     
-    for idx,((x1,x2),y,labeled) in enumerate(tqdm(train_loader,disable=(verbose==0))):     
-
+    for idx,((x1,x2),y,labeled) in enumerate(tqdm(train_loader,disable=(verbose==0))):
         model.train()
         ema_model.train()
-        x1_train,x2_train,y_train = x1.cuda(),x2.cuda(),y.cuda(async=True)
+        x1_train,x2_train,y_train = x1.cuda(),x2.cuda(),y.cuda()
         
         pred = model(x1_train)
         pred_mag = pred[:,0,:,:].unsqueeze(1)
@@ -255,30 +264,36 @@ for epoch in range(n_epoch):
         pred_mask = pred[:,2,:,:].unsqueeze(1)
 
         with torch.no_grad():
-            ema_pred = ema_model(x2_train).detach()
-            ema_pred_mag = ema_pred[:,0,:,:].unsqueeze(1)
-            ema_pred_phase = ema_pred[:,1,:,:].unsqueeze(1)
-            ema_pred_mask = ema_pred[:,2,:,:].unsqueeze(1)
+            ema_pred = ema_model(x2_train)
+            ema_pred_mag = ema_pred[:,0,:,:].unsqueeze(1).detach()
+            ema_pred_phase = ema_pred[:,1,:,:].unsqueeze(1).detach()
+            ema_pred_mask = ema_pred[:,2,:,:].unsqueeze(1).detach()
 
         y_train_mag = y_train[:,0,:,:].unsqueeze(1)
         y_train_phase = y_train[:,1,:,:].unsqueeze(1)
         y_train_mask = y_train[:,2,:,:].unsqueeze(1)
         
         labeled = (labeled == 1)
-        
         optimizer.zero_grad()
         ### define supervised loss
-        mask_loss = BCE_criterion(pred_mask[labeled],y_train_mask[labeled])
-        mag_loss = L1_criterion(y_train_mask[labeled]*pred_mag[labeled],y_train_mask[labeled]*y_train_mag[labeled])/(torch.sum(y_train_mask[labeled]) + 1e-5)
-        phase_loss = L1_criterion(y_train_mask[labeled]*pred_phase[labeled],y_train_mask[labeled]*y_train_phase[labeled])/(torch.sum(y_train_mask[labeled]) + 1e-5)
-        supervised_loss = mask_loss + mag_loss + phase_loss
+        if torch.sum(labeled).item() > 0:
+            mask_loss = BCE_criterion(pred_mask[labeled],y_train_mask[labeled])
+            mag_loss = L1_criterion(y_train_mask[labeled]*pred_mag[labeled],y_train_mask[labeled]*y_train_mag[labeled])/(torch.sum(y_train_mask[labeled]) + 1e-5)
+            phase_loss = L1_criterion(y_train_mask[labeled]*pred_phase[labeled],y_train_mask[labeled]*y_train_phase[labeled])/(torch.sum(y_train_mask[labeled]) + 1e-5)
+            supervised_loss = mask_loss + mag_loss + phase_loss
+        else:
+            mask_loss = torch.Tensor([0]).cuda()
+            mag_loss = torch.Tensor([0]).cuda()
+            phase_loss = torch.Tensor([0]).cuda()
+            supervised_loss = torch.Tensor([0]).cuda()
+            
         ### define consistency loss
         student_mask = torch.sigmoid(pred_mask)
         teacher_mask = torch.sigmoid(ema_pred_mask)
         
         B,_,F,T = teacher_mask.shape
         
-        consistency_weight = get_current_consistency_weight(init_consistency_weight,epoch,n_epoch)
+        consistency_weight = get_current_consistency_weight(init_consistency_weight,epoch,consistency_rampup)
         consistency_mask_loss = L1_criterion(student_mask,teacher_mask)/(B*F*T)
 
         teacher_mask = torch.round(teacher_mask)
@@ -287,7 +302,6 @@ for epoch in range(n_epoch):
         consistency_loss = consistency_weight*(consistency_mask_loss + consistency_mag_loss + consistency_phase_loss)
         ## loss
         loss = supervised_loss + consistency_loss
-#         loss = supervised_loss  
         
         if mixed:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -298,8 +312,10 @@ for epoch in range(n_epoch):
         
         global_step +=1
         
-        update_ema_variables(model, ema_model, ema_decay, global_step)
-
+#         if verbose:
+#             update_ema_variables(model, ema_model, ema_decay, global_step)
+        update_ema_variables(model,ema_model,ema_decay,global_step)
+    
         ## evaluate on labeled image
         zero_mask = torch.zeros_like(pred_mask[labeled])
         pred_mask = torch.round(torch.sigmoid(pred_mask[labeled]))
@@ -340,14 +356,12 @@ for epoch in range(n_epoch):
             logging("INTERMEDIATE VALIDATION VALUES")
             logging("val_loss %.6f val_mask_loss %.6f val_mag_loss %.6f val_phase_loss %.6f val_mask_accuracy %.6f val_false_negative %.6f val_false_positive %.6f val_signal_distance %.6f"%(val_loss,val_mask_loss,val_mag_loss,val_phase_loss,val_mask_accuracy,val_false_negative,val_false_positive,val_signal_distance))
     
-        
-        
     scheduler.step()
         
     ### save model and logging onto writer
     if verbose and not is_test:
         torch.save(model.module.state_dict(), os.path.join(save_path,'best_%d.pth'%epoch))
-        torch.save(ema_model.module.state_dict(), os.path.join(save_path,'ema_best_%d.pth'%epoch))
+        torch.save(ema_model.state_dict(), os.path.join(save_path,'ema_best_%d.pth'%epoch))
 
 #         saving_image_pred_mask = torch.cat(saving_image_pred_mask,dim=0)
 #         saving_image_true_mask = torch.cat(saving_image_true_mask,dim=0)

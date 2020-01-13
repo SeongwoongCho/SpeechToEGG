@@ -6,9 +6,13 @@ import torch
 
 seed_everything(42)
 
-def mix_db(x,y,db):
-    E_x = np.mean(np.abs(x)**2)
-    E_y = np.mean(np.abs(y)**2)
+def mix_db(x,y,db,torch_mode=False):
+    if torch_mode:
+        E_x = torch.mean(x**2)
+        E_y = torch.mean(y**2)
+    else:
+        E_x = np.mean(x**2)
+        E_y = np.mean(y**2)
     
     a = E_x/(E_y*(10**(db/10)))
     lam = 1/(1+a)
@@ -82,14 +86,16 @@ def spec_masking(spec, F = 15, T = 10, num_masks = 1, prob = 0.7, replace_with_z
         spec = _time_mask(spec)
     return spec
 
-def add_whitenoise(x):
+def add_whitenoise(x,torch_mode=False):
+#     print(x,x.dtype)
     db = np.random.uniform(low=0,high=30)
-    y = np.random.normal(x)
-    return mix_db(x,y,db)
+    y = np.random.normal(size = x.shape)
+    if torch_mode:
+        y = torch.from_numpy(y).cuda()
+    return mix_db(x,y,db,torch_mode)
 
 def custom_stft_aug(n_frame = 64):
     def _custom_aug(x,normal_noise,musical_noise):
-        
         db_1 = np.random.uniform(low=0,high=35)
         p_1 = np.random.uniform()
   
