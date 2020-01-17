@@ -4,3 +4,4 @@
 *.DAT
 *.npy
 *.pth
+*.onnx

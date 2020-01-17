@@ -206,10 +206,49 @@ valid : (2, 257, '2567915)
 
 loss = mask loss + mag loss + phase loss
 
---batch_size 768
---epoch 600
+--batch_size 700
+--epoch 750
 --lr 3e-4
 --CosineAnnealing(optimizer)
 --n_frame 64
 
 stride = 16
+
+# exp 13 : lR 4e-3 -> 3e-3 , cosine Annealing -> reduce LR on plateau, remove background noise
+
+EfficientUnet b2 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
+
+한 파일에 저장후 mmap 으로 읽는다. 
+
+train : (2, 257, '3261590)
+valid : (2, 257, '2567915)
+
+loss = mask loss + mag loss + phase loss
+
+--batch_size 700
+--epoch 2000
+--lr 3e-3
+--n_frame 64
+--patience 25
+
+stride = 16
+
+# exp 14 : efficientnet b4, lR 4e-3 -> 3e-3 , cosine Annealing -> reduce LR on plateau, remove background noise
+
+EfficientUnet b4 + clamp magnitude(-12,7) + clamp phase(-np.pi,np.pi) + clamp mask (-10,10)
+
+한 파일에 저장후 mmap 으로 읽는다. 
+
+train : (2, 257, '3261590)
+valid : (2, 257, '2567915)
+
+loss = mask loss + mag loss + phase loss
+
+--batch_size 512
+--epoch 15000
+--lr 3e-3
+--n_frame 64
+--patience 400
+
+train_stride = 192
+valid_stride = 64

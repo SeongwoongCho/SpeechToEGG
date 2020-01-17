@@ -18,24 +18,34 @@ from utils.radam import RAdam,Lookahead,AdamW
 from utils.aug_utils import custom_stft_aug
 from utils.stft_utils.stft import STFT
 from utils.utils import *
-from utils.loss_utils import CosineDistanceLoss
+from utils.loss_utils import CosineDistanceLoss,dice_loss, loss_sum
 
 from dataloader import *
 from efficientunet import *
 
 import apex
+import sys
 from apex import amp
 from apex.parallel import DistributedDataParallel as DDP
-# from utils.sync_batchnorm import convert_model
 
 seed_everything(42)
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default = 8192)
+parser.add_argument('--train_stride', type=int, default = 192)
+parser.add_argument('--valid_stride', type=int, default = 64)
 parser.add_argument('--epoch',type=int, default = 100)
 parser.add_argument('--weight_decay',type=float,default = 1e-5)
+parser.add_argument('--optimizer',type=str,choices = ['RMSProp','amsgrad','RAdam','RAdamW'])
+parser.add_argument('--Lookahead_alpha',type=float,default=0.5)
+parser.add_argument('--Lookahead_k',type=int,default=6)
+parser.add_argument('--maskloss_type',type=str,choices = ['BCE','DiceLoss','BCEDICE'])
+parser.add_argument('--pos_weight',type=float,default=1)
+parser.add_argument('--loss_lambda',type=float,default = 1)
+parser.add_argument('--loss_gamma',type=float,default=1)
 parser.add_argument('--lr', type=float, default = 3e-4)
 parser.add_argument('--exp_num',type=str,default='0')
 parser.add_argument('--n_frame',type=int,default=64)
+parser.add_argument('--patience',type=int,default=30)
 parser.add_argument('--local_rank',type=int,default=0)
 parser.add_argument('--test',action='store_true')
 parser.add_argument('--ddp',action='store_true')
@@ -85,8 +95,9 @@ normal_noise,musical_noise = load_stft_noise(is_test)
 logging(train.shape)
 logging(val.shape)
 
-train_dataset = Dataset(train,n_frame,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
-valid_dataset = Dataset(val,n_frame, is_train = False)
+train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
+# train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = None)
+valid_dataset = Dataset(val,n_frame,args.valid_stride, is_train = False)
 train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
 valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
 train_loader = data.DataLoader(dataset=train_dataset,
@@ -104,7 +115,13 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
-BCE_criterion = nn.BCEWithLogitsLoss()
+if args.maskloss_type == 'BCE':
+    mask_criterion = nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda())
+elif args.maskloss_type == 'DiceLoss':
+    mask_criterion = dice_loss()
+elif args.maskloss_type == 'BCEDICE':
+    mask_criterion = loss_sum([nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda()), dice_loss()])
+
 L1_criterion = nn.L1Loss(reduction='sum')
 L2_criterion = nn.MSELoss(reduction='sum')
 cosine_distance_criterion = CosineDistanceLoss()
@@ -113,15 +130,24 @@ cosine_distance_criterion = CosineDistanceLoss()
 model definition
 """
 
-model = get_efficientunet_b2(out_channels=3, concat_input=True, pretrained=False)
+model = get_efficientunet_b4(out_channels=3, concat_input=True, pretrained=False)
 model.cuda()
 
-optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-optimizer = Lookahead(optimizer,alpha=0.5,k=6)
+if args.optimizer == 'RAdam':
+    optimizer = RAdam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+elif args.optmizer == 'RAdamW':
+    optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+elif args.optimizer == 'RMSProp':
+    optimizer = torch.optim.RMSprop(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+elif args.optimizer == 'amsgrad':
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay,amsgrad=True)
+
+optimizer = Lookahead(optimizer,alpha=args.Lookahead_alpha,k=args.Lookahead_k)
 if mixed:
     model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 
-scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
+# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=args.patience, verbose=True)
+# scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
 
 if ddp:
     model = torch.nn.parallel.DistributedDataParallel(model,
@@ -172,11 +198,11 @@ for epoch in range(n_epoch):
         
         optimizer.zero_grad()
         
-        mask_loss = BCE_criterion(pred_mask,y_train_mask)
+        mask_loss = mask_criterion(pred_mask,y_train_mask)
         mag_loss = L1_criterion(y_train_mask*pred_mag,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
         phase_loss = L1_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
         
-        loss = mask_loss + mag_loss + phase_loss
+        loss = mask_loss + args.loss_gamma*(mag_loss + args.loss_lambda*phase_loss)
         
         if mixed:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -223,13 +249,6 @@ for epoch in range(n_epoch):
     val_false_negative = 0.
     val_signal_distance = 0. ## just for monitering
     
-    saving_image_pred_mask = []
-    saving_image_pred_mag = []
-    saving_image_pred_phase = []
-    saving_image_true_mask = []
-    saving_image_true_mag = []
-    saving_image_true_phase = []
-    
     model.eval()
 
     for idx,(_x,_y) in enumerate(tqdm(valid_loader,disable=(verbose==0))):
@@ -247,10 +266,10 @@ for epoch in range(n_epoch):
             y_val_phase = y_val[:,1,:,:].unsqueeze(1)
             y_val_mask = y_val[:,2,:,:].unsqueeze(1)
 
-            mask_loss = BCE_criterion(pred_mask,y_val_mask)
+            mask_loss = mask_criterion(pred_mask,y_val_mask)
             mag_loss = L1_criterion(y_val_mask*pred_mag,y_val_mask*y_val_mag)/(torch.sum(y_val_mask) + 1e-5)
             phase_loss = L1_criterion(y_val_mask*pred_phase,y_val_mask*y_val_phase)/(torch.sum(y_val_mask) + 1e-5)
-            loss = mask_loss + mag_loss + phase_loss
+            loss = mask_loss + args.loss_gamma*(mag_loss + args.loss_lambda*phase_loss)
         
             zero_mask = torch.zeros_like(pred_mask)
             pred_mask = torch.round(torch.sigmoid(pred_mask))
@@ -259,14 +278,6 @@ for epoch in range(n_epoch):
             false_negative = torch.mean(torch.eq(mask_diff,zero_mask-1).type(torch.cuda.FloatTensor)) ## voice(1)인데 unvoice(0)로 mask한 경우
             false_positive = torch.mean(torch.eq(mask_diff,zero_mask+1).type(torch.cuda.FloatTensor)) ## unvoice(0)인데 voice(1)로 mask한 경우
         
-            if verbose:
-                saving_image_pred_mask.append(pred_mask.cpu().detach())
-                saving_image_pred_mag.append(pred_mag.cpu().detach())
-                saving_image_pred_phase.append(pred_phase.cpu().detach())
-                saving_image_true_mask.append(y_val_mask.cpu().detach())
-                saving_image_true_mag.append(y_val_mag.cpu().detach())
-                saving_image_true_phase.append(y_val_phase.cpu().detach())
-
             pred_mask = pred_mask[:,0,:,:]
             pred_mag = pred_mag[:,0,:,:]
             pred_phase = pred_phase[:,0,:,:]
@@ -288,39 +299,13 @@ for epoch in range(n_epoch):
             val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
             val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
 
-    scheduler.step()
+#     scheduler.step(val_signal_distance)
+    if verbose:
+        if val_signal_distance < best_val:
+            best_val = val_signal_distance
     
     if verbose and not is_test:
         torch.save(model.module.state_dict(), os.path.join(save_path,'best_%d.pth'%epoch))
-        
-        if epoch%5 == 0:
-            saving_image_pred_mask = torch.cat(saving_image_pred_mask,dim=0)
-            saving_image_true_mask = torch.cat(saving_image_true_mask,dim=0)
-            saving_image_pred_mag = torch.cat(saving_image_pred_mag,dim=0)
-            saving_image_true_mag = torch.cat(saving_image_true_mag,dim=0)
-            saving_image_pred_phase = torch.cat(saving_image_pred_phase,dim=0)
-            saving_image_true_phase = torch.cat(saving_image_true_phase,dim=0)
-
-            saving_image_pred_mask = torch.cat([saving_image_pred_mask,saving_image_pred_mask,saving_image_pred_mask],dim=1)
-            saving_image_true_mask = torch.cat([saving_image_true_mask,saving_image_true_mask,saving_image_true_mask],dim=1)
-            saving_image_pred_mag = torch.cat([saving_image_pred_mag,saving_image_pred_mag,saving_image_pred_mag],dim=1)
-            saving_image_true_mag = torch.cat([saving_image_true_mag,saving_image_true_mag,saving_image_true_mag],dim=1)
-            saving_image_pred_phase = torch.cat([saving_image_pred_phase,saving_image_pred_phase,saving_image_pred_phase],dim=1)
-            saving_image_true_phase = torch.cat([saving_image_true_phase,saving_image_true_phase,saving_image_true_phase],dim=1)
-
-            saving_image_pred_mask = make_grid(saving_image_pred_mask, normalize=True, scale_each=True)
-            saving_image_true_mask = make_grid(saving_image_true_mask, normalize=True, scale_each=True)
-            saving_image_pred_mag = make_grid(saving_image_pred_mag, normalize=True, scale_each=True)
-            saving_image_true_mag = make_grid(saving_image_true_mag, normalize=True, scale_each=True)
-            saving_image_pred_phase = make_grid(saving_image_pred_phase, normalize=True, scale_each=True)
-            saving_image_true_phase = make_grid(saving_image_true_phase, normalize=True, scale_each=True)
-
-            writer.add_image('img_true_mag/stft', saving_image_true_mag, epoch)
-            writer.add_image('img_true_phase/stft', saving_image_true_phase, epoch)
-            writer.add_image('img_true_mask/stft', saving_image_true_mask, epoch)
-            writer.add_image('img_pred_mag/stft', saving_image_pred_mag, epoch)
-            writer.add_image('img_pred_phase/stft', saving_image_pred_phase, epoch)
-            writer.add_image('img_pred_mask/stft', saving_image_pred_mask, epoch)
 
         writer.add_scalar('total_loss/train', train_loss, epoch)
         writer.add_scalar('total_loss/val',val_loss,epoch)
@@ -342,8 +327,10 @@ for epoch in range(n_epoch):
         
     logging("Epoch [%d]/[%d] Metrics([train][valid]) are shown below "%(epoch,n_epoch))
     logging("Total loss [%.6f][%.6f] Mask loss [%.6f][%.6f] Mag loss [%.6f][%.6f] Phase loss [%.6f][%.6f] Mask accuracy [%.4f][%.4f] False Positive [%.4f][%.4f] False Negative [%.4f][%.4f] Signal distance [%.4f][%.4f]"%(train_loss,val_loss,train_mask_loss,val_mask_loss,train_mag_loss,val_mag_loss,train_phase_loss,val_phase_loss,train_mask_accuracy,val_mask_accuracy,train_false_positive,val_false_positive,train_false_negative,val_false_negative,train_signal_distance,val_signal_distance))
-        
+    
 if verbose and not is_test:
     writer.close()
 logging("[!] training end")
 
+if verbose:
+    print(best_val)

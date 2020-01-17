@@ -32,19 +32,24 @@ def load_stft_noise(is_test=False):
     return normal_noise, musical_noise
     
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self,X,n_frame,is_train = True,normal_noise = None,musical_noise=None,aug=None,pseudo_mode=False):
+    def __init__(self,X,n_frame,stride,is_train = True,normal_noise = None,musical_noise=None,aug=None,pseudo_mode=False):
         self.data = np.load(X,mmap_mode='r') if isinstance(X,str) else X
         self.n_frame = n_frame
-        self.stride = 16
+        self.stride = stride
         self.is_train = is_train
         self.normal_noise = normal_noise
         self.musical_noise = musical_noise
         self.aug= aug
         self.pseudo_mode=pseudo_mode
     def __len__(self):
-        return (self.data.shape[-1] - self.n_frame) // self.stride
+        return (self.data.shape[-1] - self.n_frame - self.stride) // self.stride
     def __getitem__(self,idx):
-        [X,Y] = self.data[:,:,idx*self.stride:idx*self.stride + self.n_frame] ## 2,F,T
+        if self.stride <=self.n_frame:
+            offset = np.random.randint(low=0,high=self.stride)
+            [X,Y] = self.data[:,:,offset + idx*self.stride:offset + idx*self.stride + self.n_frame] ## 2,F,T
+        else:
+            random_idx = np.random.randint(low = idx*self.stride, high=(idx+1)*self.stride - self.n_frame - 1)
+            [X,Y] = self.data[:,:,random_idx:random_idx+self.n_frame]
         # Mixing before mel
         if self.aug:
             X = self.aug(X,self.normal_noise,self.musical_noise)
@@ -54,7 +59,6 @@ class Dataset(torch.utils.data.Dataset):
         # SpecAug after mel
         if self.is_train:
             X = add_whitenoise(X)
-            X = spec_masking(X, F = 5, T = 1, num_masks = 10, prob = 1, replace_with_zero = True)
         
         if self.pseudo_mode:
             return X,Y,True

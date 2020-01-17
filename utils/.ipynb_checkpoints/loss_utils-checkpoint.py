@@ -104,3 +104,32 @@ def CosineDistanceLoss():
     def f(pred,true):
         return torch.mean(torch.acos(F.cosine_similarity(pred,true,dim=1,eps = 1e-4)),dim=0)
     return f
+
+def dice_loss():
+    def _dice_loss(pred_logit, target):
+        """This definition generalize to real valued pred and target vector.
+    This should be differentiable.
+        pred: tensor with first dimension as batch
+        target: tensor with first dimension as batch
+        """
+
+        smooth = 1.
+
+        # have to use contiguous since they may from a torch.view op
+        iflat = torch.sigmoid(pred_logit).contiguous().view(-1)
+        tflat = target.contiguous().view(-1)
+        intersection = (iflat * tflat).sum()
+
+        A_sum = torch.sum(tflat * iflat)
+        B_sum = torch.sum(tflat * tflat)
+
+        return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth))
+    return _dice_loss
+
+def loss_sum(losses):
+    def loss(pred_logit,target):
+        sum = 0
+        for i in range(len(losses)):
+            sum = sum + losses[i](pred_logit,target)
+        return sum
+    return loss
