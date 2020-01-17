@@ -29,10 +29,9 @@ for iter in range(N_iter):
     loss_lambda = 10**np.random.uniform(-0.5,0.5)
     loss_gamma = 10**np.random.uniform(-0.5,0.5)
     lr = 10**np.random.uniform(-2,-4)
-    exp_num = "TUNING_"+str(iter)
+    exp_num = "TUNING/"+str(iter)
     
     command = "python -m torch.distributed.launch --nproc 4 train.py --batch_size {} --train_stride {} --valid_stride {} --epoch {} --weight_decay {} --optimizer {} --Lookahead_alpha {} --Lookahead_k {} --maskloss_type {} --pos_weight {} --loss_lambda {} --loss_gamma {} --lr {} --exp_num {} --n_frame {} --ddp --mixed".format(batch_size, train_stride, valid_stride, epoch, weight_decay, optimizer, Lookahead_alpha, Lookahead_k, maskloss_type, pos_weight, loss_lambda, loss_gamma, lr, exp_num, n_frame)
-    
     
     x = subprocess.check_output(command.split(" "))
     best_val = float(x.decode("utf-8").split('\n')[-2])

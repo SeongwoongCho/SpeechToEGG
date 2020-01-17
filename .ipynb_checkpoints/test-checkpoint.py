@@ -1,4 +1,2 @@
-
-print("asdfas")
-print("2.23")
-print("1.23")
+print(1)
+print(2)

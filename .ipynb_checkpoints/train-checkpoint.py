@@ -82,8 +82,11 @@ if ddp:
     
 verbose = 1 if args.local_rank ==0 else 0
 
+
+# print(args.local_rank)
 if not verbose:
     warnings.filterwarnings(action='ignore')
+
 logging = print_verbose(verbose)
 logging("[*] load data ...")
 
