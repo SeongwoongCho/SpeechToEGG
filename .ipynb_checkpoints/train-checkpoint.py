@@ -38,7 +38,8 @@ parser.add_argument('--weight_decay',type=float,default = 1e-5)
 parser.add_argument('--optimizer',type=str,choices = ['RMSProp','amsgrad','RAdam','RAdamW'])
 parser.add_argument('--Lookahead_alpha',type=float,default=0.5)
 parser.add_argument('--Lookahead_k',type=int,default=6)
-parser.add_argument('--maskloss_type',type=str,choices = ['BCE','DiceLoss','BCEDICE'])
+# parser.add_argument('--maskloss_type',type=str,choices = ['BCE','DiceLoss','BCEDICE'])
+parser.add_argument('--BCEDICE_ratio',type=float,default = 0.5)
 parser.add_argument('--pos_weight',type=float,default=1)
 parser.add_argument('--loss_lambda',type=float,default = 1)
 parser.add_argument('--loss_gamma',type=float,default=1)
@@ -118,12 +119,15 @@ valid_loader = data.DataLoader(dataset=valid_dataset,
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
 
-if args.maskloss_type == 'BCE':
-    mask_criterion = nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda())
-elif args.maskloss_type == 'DiceLoss':
-    mask_criterion = dice_loss()
-elif args.maskloss_type == 'BCEDICE':
-    mask_criterion = loss_sum([nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda()), dice_loss()])
+# if args.maskloss_type == 'BCE':
+#     mask_criterion = nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda())
+# elif args.maskloss_type == 'DiceLoss':
+#     mask_criterion = dice_loss()
+# elif args.maskloss_type == 'BCEDICE':
+#     mask_criterion = loss_sum([nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda()), dice_loss()])
+losses = [nn.BCEWithLogitsLoss(pos_weight = torch.Tensor(np.array([1*args.pos_weight])).cuda()), dice_loss()]
+ratio = [args.BCEDICE_ratio, 1-args.BCEDICE_ratio]
+mask_criterion = loss_sum(losses,ratio)
 
 L1_criterion = nn.L1Loss(reduction='sum')
 L2_criterion = nn.MSELoss(reduction='sum')

@@ -120,16 +120,16 @@ def dice_loss():
         tflat = target.contiguous().view(-1)
         intersection = (iflat * tflat).sum()
 
-        A_sum = torch.sum(tflat * iflat)
+        A_sum = torch.sum(iflat * iflat)
         B_sum = torch.sum(tflat * tflat)
 
         return 1 - ((2. * intersection + smooth) / (A_sum + B_sum + smooth))
     return _dice_loss
 
-def loss_sum(losses):
+def loss_sum(losses,ratio):
     def loss(pred_logit,target):
         sum = 0
         for i in range(len(losses)):
-            sum = sum + losses[i](pred_logit,target)
+            sum = sum + ratio[i]*losses[i](pred_logit,target)
         return sum
     return loss

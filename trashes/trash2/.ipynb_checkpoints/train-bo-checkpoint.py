@@ -136,7 +136,7 @@ bayes_optimizer = BayesianOptimization(
     verbose=2
 )
 
-bayes_optimizer.maximize(init_points=5, n_iter=27, acq='ei', xi=0.01)
+bayes_optimizer.minimize(init_points=6, n_iter=27, acq='ei', xi=0.01)
 
 for i, res in enumerate(bayes_optimizer.res):
     print('Iteration {}: \n\t{}'.format(i, res))
