@@ -5,7 +5,7 @@ import torch.utils.data
 import multiprocessing
 
 from utils.utils import seed_everything
-from utils.prep_utils import stft_to_mel, stft_process
+from utils.prep_utils import stft_process
 from utils.aug_utils import spec_masking, add_whitenoise
 from sklearn.model_selection import train_test_split
 

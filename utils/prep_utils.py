@@ -60,38 +60,25 @@ def dynamic_range_decompression(x, C=1, torch_mode=False):
         return torch.exp(x) / C
     return np.exp(x) / C
 
-def stft_to_mel(stft):
-    yS = np.abs(stft)
-    yS = librosa.feature.melspectrogram(S=yS,sr=16000,n_mels=80,n_fft=512, hop_length=128,fmax=8192,fmin=60)
-    yS = -dynamic_range_compression(yS)
-    return yS
+def mag_normalize(mag):
+    return 10*mag/(np.mean(mag**2) + 1e-3)
 
-def stft_process(stft,mask=False,torch_mode=False):
-    if torch_mode:
-        mag = torch.Tensor(np.abs(stft)).unsqueeze(0).cuda()
-        phase = torch.Tensor(np.angle(stft)).unsqueeze(0).cuda()
-        
-        mag = dynamic_range_compressions(mag,torch_mode=True)
-        
-        if mask:
-            m = make_mask(mag,torch_mode)
-            conc = torch.cat([mag,phase,m],dim=0)
-        else:
-            conc = torch.cat([mag,phase],dim=0)
+def stft_process(stft,mask=False):
+    mag = np.abs(stft)
+    phase = np.angle(stft)
+    
+    if not mask:
+        mag = mag_normalize(mag) ## input만 normalize 시켜준다. mask는 output에 대해서만 구해준다.
+    mag = dynamic_range_compression(mag)
+#     phase = unwrap(phase)
+    mag = mag[np.newaxis,:,:]
+    phase = phase[np.newaxis,:,:]
+
+    if mask:
+        m = make_mask(mag)
+        conc = np.concatenate([mag,phase,m],axis=0)
     else:
-        mag = np.abs(stft)
-        phase = np.angle(stft)
-
-        mag = dynamic_range_compression(mag)
-    #     phase = unwrap(phase)
-        mag = mag[np.newaxis,:,:]
-        phase = phase[np.newaxis,:,:]
-
-        if mask:
-            m = make_mask(mag)
-            conc = np.concatenate([mag,phase,m],axis=0)
-        else:
-            conc = np.concatenate([mag,phase],axis=0)
+        conc = np.concatenate([mag,phase],axis=0)
     return conc
 
 def make_mask(mag,torch_mode=False):
@@ -108,6 +95,12 @@ def make_mask(mag,torch_mode=False):
     return mask
 
 '''
+def stft_to_mel(stft):
+    yS = np.abs(stft)
+    yS = librosa.feature.melspectrogram(S=yS,sr=16000,n_mels=80,n_fft=512, hop_length=128,fmax=8192,fmin=60)
+    yS = -dynamic_range_compression(yS)
+    return yS
+
 def loudness_normalize(audio, criterion = 0.1):
     power = np.mean(audio**2)
     return audio*criterion/(power+1e-3)

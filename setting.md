@@ -252,3 +252,23 @@ loss = mask loss + mag loss + phase loss
 
 train_stride = 192
 valid_stride = 64
+
+# exp 15
+python -m torch.distributed.launch --nproc 4 train.py --batch_size 480 --train_stride 16 --valid_stride 64 --epoch 1000 --weight_decay 0.0002817 --optimizer RAdam --Lookahead_alpha 0.58323 --Lookahead_k 4 --BCEDICE_ratio 0.6011 --pos_weight 1 --loss_lambda 2.15 --loss_gamma 2.9506 --lr 0.00376 --exp_num 15 --n_frame 64 --patience 50 --ddp --mixed
+
+# exp 16
+15에서 augment = None
+
+# exp 17
+Data processing 적용(periodic normalization) + augment = None 
+ ==> cds loss를 쓰지 않는 이상 exp 16이랑 매우 비슷함.
+ 
+# exp 18
+Data processing 적용(periodic normalization) + augment = None 
+
++ 
+Phase loss 로 cosine distance loss 를 사용
+즉, phase loss = cds(signal,recon_signal) where
+
+signal = true_mask * true_mag * e^i(true_phase)
+recon_signal = true_mask * true_mag * e^i(pred_phase)

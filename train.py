@@ -92,15 +92,17 @@ logging = print_verbose(verbose)
 logging("[*] load data ...")
 
 st = time.time()
-train = np.load('../eggdata/TrainSTFT/train_data_full.npy',mmap_mode='r')
-val = np.load('../eggdata/TrainSTFT/valid_data_full.npy',mmap_mode='r')
+# train = np.load('../eggdata/TrainSTFT/train_data_full.npy',mmap_mode='r')
+# val = np.load('../eggdata/TrainSTFT/valid_data_full.npy',mmap_mode='r')
+train = np.load('../eggdata/TrainSTFT/train_processing_stft.npy',mmap_mode='r')
+val = np.load('../eggdata/TrainSTFT/valid_processing_stft.npy',mmap_mode='r')
 normal_noise,musical_noise = load_stft_noise(is_test)
 
 logging(train.shape)
 logging(val.shape)
 
-train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
-# train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = None)
+train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = None)
+# train_dataset = Dataset(train,n_frame,args.train_stride,normal_noise=normal_noise,musical_noise=musical_noise,is_train = True, aug = custom_stft_aug(n_frame))
 valid_dataset = Dataset(val,n_frame,args.valid_stride, is_train = False)
 train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
 valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
@@ -153,7 +155,7 @@ optimizer = Lookahead(optimizer,alpha=args.Lookahead_alpha,k=args.Lookahead_k)
 if mixed:
     model,optimizer = amp.initialize(model,optimizer,opt_level = 'O1')
 
-# scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=args.patience, verbose=True)
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=args.patience, verbose=True)
 # scheduler = CosineAnnealingLR(optimizer, n_epoch, eta_min=0, last_epoch=-1)
 
 if ddp:
@@ -236,7 +238,7 @@ for epoch in range(n_epoch):
         pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
         y_train_signal_recon = stftTool.inverse(y_train_mask*torch.exp(y_train_mag),y_train_phase,n_frame*128)
         signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_train_signal_recon[:,30:-30])
-
+ 
         train_loss += dynamic_loss(loss,ddp)/len(train_loader)
         train_mask_loss += dynamic_loss(mask_loss,ddp)/len(train_loader)
         train_mag_loss += dynamic_loss(mag_loss,ddp)/len(train_loader)
@@ -306,7 +308,7 @@ for epoch in range(n_epoch):
             val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
             val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
 
-#     scheduler.step(val_signal_distance)
+    scheduler.step(val_signal_distance)
     if verbose:
         if val_signal_distance < best_val:
             best_val = val_signal_distance

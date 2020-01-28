@@ -9,7 +9,7 @@ from bayes_opt import BayesianOptimization
 
 train_stride = 16
 valid_stride = 64
-batch_size = 512
+batch_size = 480
 epoch = 50
 n_frame = 64
 global_iter = 0

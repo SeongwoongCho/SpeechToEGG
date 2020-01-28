@@ -1,4 +1,5 @@
 from utils.utils import seed_everything
+from utils.prep_utils import mag_normalize
 import numpy as np
 import random
 import torch
@@ -6,13 +7,9 @@ import torch
 
 seed_everything(42)
 
-def mix_db(x,y,db,torch_mode=False):
-    if torch_mode:
-        E_x = torch.mean(x**2)
-        E_y = torch.mean(y**2)
-    else:
-        E_x = np.mean(x**2)
-        E_y = np.mean(y**2)
+def mix_db(x,y,db):
+    E_x = np.mean(x**2)
+    E_y = np.mean(y**2)
     
     a = E_x/(E_y*(10**(db/10)))
     lam = 1/(1+a)
@@ -86,29 +83,27 @@ def spec_masking(spec, F = 15, T = 10, num_masks = 1, prob = 0.7, replace_with_z
         spec = _time_mask(spec)
     return spec
 
-def add_whitenoise(x,torch_mode=False):
+def add_whitenoise(x):
 #     print(x,x.dtype)
-    db = np.random.uniform(low=0,high=30)
+    db = np.random.uniform(low=0,high=15)
     y = np.random.normal(size = x.shape)
-    if torch_mode:
-        y = torch.from_numpy(y).cuda()
-    return mix_db(x,y,db,torch_mode)
+    return mix_db(x,y,db)
 
 def custom_stft_aug(n_frame = 64):
     def _custom_aug(x,normal_noise,musical_noise):
-        db_1 = np.random.uniform(low=0,high=35)
-        p_1 = np.random.uniform()
+        db = np.random.uniform(low=-5,high=10)
+        p = np.random.uniform()
   
-        if 0.1 < p_1 < 0.6:
+        if 0.1 < p < 0.6:
             pi = random.randint(0,len(normal_noise)-1)
             pi2 = random.randint(0,len(normal_noise[pi])-n_frame-1)
             y = normal_noise[pi][:,pi2:pi2+n_frame]
-            x = mix_db(x,y,db_1)
-        elif 0.6 < p_1:
+            x = mix_db(x,y,db)
+        elif 0.6 < p:
             pi = random.randint(0,len(musical_noise)-1)
             pi2 = random.randint(0,len(musical_noise[pi])-n_frame-1)
             y = musical_noise[pi][:,pi2:pi2+n_frame]
-            x = mix_db(x,y,db_1)
+            x = mix_db(x,y,db)
     
         return x
     return _custom_aug
