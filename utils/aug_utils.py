@@ -89,22 +89,22 @@ def add_whitenoise(x):
     y = np.random.normal(size = x.shape)
     return mix_db(x,y,db)
 
-def custom_stft_aug(n_frame = 64):
-    def _custom_aug(x,normal_noise,musical_noise):
-        db = np.random.uniform(low=-5,high=10)
-        p = np.random.uniform()
+# def custom_stft_aug(n_frame = 64):
+#     def _custom_aug(x,normal_noise,musical_noise):
+#         db = np.random.uniform(low=-5,high=10)
+#         p = np.random.uniform()
   
-        if 0.1 < p < 0.6:
-            pi = random.randint(0,len(normal_noise)-1)
-            pi2 = random.randint(0,len(normal_noise[pi])-n_frame-1)
-            y = normal_noise[pi][:,pi2:pi2+n_frame]
-            x = mix_db(x,y,db)
-        elif 0.6 < p:
-            pi = random.randint(0,len(musical_noise)-1)
-            pi2 = random.randint(0,len(musical_noise[pi])-n_frame-1)
-            y = musical_noise[pi][:,pi2:pi2+n_frame]
-            x = mix_db(x,y,db)
+#         if 0.1 < p < 0.6:
+#             pi = random.randint(0,len(normal_noise)-1)
+#             pi2 = random.randint(0,len(normal_noise[pi])-n_frame-1)
+#             y = normal_noise[pi][:,pi2:pi2+n_frame]
+#             x = mix_db(x,y,db)
+#         elif 0.6 < p:
+#             pi = random.randint(0,len(musical_noise)-1)
+#             pi2 = random.randint(0,len(musical_noise[pi])-n_frame-1)
+#             y = musical_noise[pi][:,pi2:pi2+n_frame]
+#             x = mix_db(x,y,db)
     
-        return x
-    return _custom_aug
+#         return x
+#     return _custom_aug
     

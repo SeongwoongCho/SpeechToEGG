@@ -2,17 +2,11 @@ import os
 import numpy as np
 import torch
 import torch.utils.data
-import multiprocessing
+import librosa
 
 from utils.utils import seed_everything
-from utils.prep_utils import stft_process
-from utils.aug_utils import spec_masking, add_whitenoise
-from sklearn.model_selection import train_test_split
-
-import time
-
-from utils.prep_utils import dynamic_range_decompression
-from scipy.special import expit
+from utils.prep_utils import stft_process,loudness_normalize
+from utils.aug_utils import mix_db
 
 seed_everything(42)
 
@@ -30,39 +24,69 @@ def load_stft_noise(is_test=False):
     musical_noise = [np.load(musical_dir+file) for file in musical_noise_files]
     
     return normal_noise, musical_noise
-    
+
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self,X,n_frame,stride,is_train = True,normal_noise = None,musical_noise=None,aug=None,pseudo_mode=False):
-        self.data = np.load(X,mmap_mode='r') if isinstance(X,str) else X
-        self.n_frame = n_frame
+    def __init__(self,X,n_sample=1024,stride = 512, config = None,is_train=True,aug = None):
+        self.X = X
+        self.n_sample = n_sample
         self.stride = stride
         self.is_train = is_train
-        self.normal_noise = normal_noise
-        self.musical_noise = musical_noise
-        self.aug= aug
-        self.pseudo_mode=pseudo_mode
+        self.aug = aug
+        self.config = config
+
     def __len__(self):
-        return (self.data.shape[-1] - self.n_frame - self.stride) // self.stride
+        return (self.X.shape[1]-self.n_sample)//self.stride -1
     def __getitem__(self,idx):
-        if self.stride <=self.n_frame:
-            offset = np.random.randint(low=0,high=self.stride)
-            [X,Y] = self.data[:,:,offset + idx*self.stride:offset + idx*self.stride + self.n_frame] ## 2,F,T
-        else:
-            random_idx = np.random.randint(low = idx*self.stride, high=(idx+1)*self.stride - self.n_frame - 1)
-            [X,Y] = self.data[:,:,random_idx:random_idx+self.n_frame]
-        # Mixing before mel
-        if self.aug:
-            X = self.aug(X,self.normal_noise,self.musical_noise)
-        X = stft_process(X).astype(np.float32) ## 2,F,T mag,phase
-        Y = stft_process(Y,mask=True).astype(np.float32) ## 3,F,T mag,phase,mask
-        
-        # SpecAug after mel
+        start_frame = idx*self.stride + np.random.randint(0,self.n_sample-1)
+#         start_frame = idx*self.stride + self.n_sample-1
+        X = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
+        y = np.array(self.X[1,start_frame : start_frame + self.n_sample].tolist())
         if self.is_train:
-            X = add_whitenoise(X)
+            ## add white noise
+            db = np.random.uniform(0,20)
+            noise = np.random.normal(size = X.shape)
+            X = mix_db(X,noise,db)
+            
+        X = loudness_normalize(X)
+        X = librosa.stft(X,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        y = librosa.stft(y,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        X = stft_process(X).astype(np.float32)
+        y = stft_process(y,mask=True).astype(np.float32)
         
-        if self.pseudo_mode:
-            return X,Y,True
-        return X,Y
+        return X,y
+
+# class Dataset(torch.utils.data.Dataset):
+#     def __init__(self,X,n_frame,stride,is_train = True,normal_noise = None,musical_noise=None,aug=None,pseudo_mode=False):
+#         self.data = np.load(X,mmap_mode='r') if isinstance(X,str) else X
+#         self.n_frame = n_frame
+#         self.stride = stride
+#         self.is_train = is_train
+#         self.normal_noise = normal_noise
+#         self.musical_noise = musical_noise
+#         self.aug= aug
+#         self.pseudo_mode=pseudo_mode
+#     def __len__(self):
+#         return (self.data.shape[-1] - self.n_frame - self.stride) // self.stride
+#     def __getitem__(self,idx):
+#         if self.stride <=self.n_frame:
+#             offset = np.random.randint(low=0,high=self.stride)
+#             [X,Y] = self.data[:,:,offset + idx*self.stride:offset + idx*self.stride + self.n_frame] ## 2,F,T
+#         else:
+#             random_idx = np.random.randint(low = idx*self.stride, high=(idx+1)*self.stride - self.n_frame - 1)
+#             [X,Y] = self.data[:,:,random_idx:random_idx+self.n_frame]
+#         # Mixing before mel
+#         if self.aug:
+#             X = self.aug(X,self.normal_noise,self.musical_noise)
+#         X = stft_process(X).astype(np.float32) ## 2,F,T mag,phase
+#         Y = stft_process(Y,mask=True).astype(np.float32) ## 3,F,T mag,phase,mask
+        
+#         # SpecAug after mel
+#         if self.is_train:
+#             X = add_whitenoise(X)
+        
+#         if self.pseudo_mode:
+#             return X,Y,True
+#         return X,Y
 
 
 ## dataset cat 하기     

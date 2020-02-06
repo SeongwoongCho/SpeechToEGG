@@ -140,6 +140,7 @@ model definition
 """
 
 model = get_efficientunet_b4(out_channels=3, concat_input=True, pretrained=False)
+model.load_state_dict(torch.load('./models/masked/exp16/best_346.pth',map_location = lambda storage,loc:storage))
 model.cuda()
 
 if args.optimizer == 'RAdam':
@@ -209,7 +210,19 @@ for epoch in range(n_epoch):
         
         mask_loss = mask_criterion(pred_mask,y_train_mask)
         mag_loss = L1_criterion(y_train_mask*pred_mag,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
-        phase_loss = L1_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
+        
+        pred_mask = pred_mask[:,0,:,:]
+        pred_mag = pred_mag[:,0,:,:]
+        pred_phase = pred_phase[:,0,:,:]
+        
+        y_train_mask = y_train_mask[:,0,:,:]
+        y_train_mag = y_train_mag[:,0,:,:]
+        y_train_phase = y_train_phase[:,0,:,:]
+        
+        r_phase = stftTool.inverse(y_train_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
+        r_phase_true = stftTool.inverse(y_train_mask*torch.exp(y_train_mag),y_train_phase,n_frame*128)
+        phase_loss = cosine_distance_criterion(r_phase[:,30:-30],r_phase_true[:,30:-30])        
+#         phase_loss = L1_criterion(y_train_mask*pred_phase,y_train_mask*y_train_phase)/(torch.sum(y_train_mask) + 1e-5)
         
         loss = mask_loss + args.loss_gamma*(mag_loss + args.loss_lambda*phase_loss)
         
@@ -226,14 +239,6 @@ for epoch in range(n_epoch):
         mask_accuracy = torch.mean(torch.eq(mask_diff,zero_mask).type(torch.cuda.FloatTensor))
         false_negative = torch.mean(torch.eq(mask_diff,zero_mask-1).type(torch.cuda.FloatTensor)) ## voice(1)인데 unvoice(0)로 mask한 경우
         false_positive = torch.mean(torch.eq(mask_diff,zero_mask+1).type(torch.cuda.FloatTensor)) ## unvoice(0)인데 voice(1)로 mask한 경우
-        
-        pred_mask = pred_mask[:,0,:,:]
-        pred_mag = pred_mag[:,0,:,:]
-        pred_phase = pred_phase[:,0,:,:]
-        
-        y_train_mask = y_train_mask[:,0,:,:]
-        y_train_mag = y_train_mag[:,0,:,:]
-        y_train_phase = y_train_phase[:,0,:,:]
         
         pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
         y_train_signal_recon = stftTool.inverse(y_train_mask*torch.exp(y_train_mag),y_train_phase,n_frame*128)
@@ -277,16 +282,7 @@ for epoch in range(n_epoch):
 
             mask_loss = mask_criterion(pred_mask,y_val_mask)
             mag_loss = L1_criterion(y_val_mask*pred_mag,y_val_mask*y_val_mag)/(torch.sum(y_val_mask) + 1e-5)
-            phase_loss = L1_criterion(y_val_mask*pred_phase,y_val_mask*y_val_phase)/(torch.sum(y_val_mask) + 1e-5)
-            loss = mask_loss + args.loss_gamma*(mag_loss + args.loss_lambda*phase_loss)
-        
-            zero_mask = torch.zeros_like(pred_mask)
-            pred_mask = torch.round(torch.sigmoid(pred_mask))
-            mask_diff = pred_mask - y_val_mask
-            mask_accuracy = torch.mean(torch.eq(mask_diff,zero_mask).type(torch.cuda.FloatTensor))
-            false_negative = torch.mean(torch.eq(mask_diff,zero_mask-1).type(torch.cuda.FloatTensor)) ## voice(1)인데 unvoice(0)로 mask한 경우
-            false_positive = torch.mean(torch.eq(mask_diff,zero_mask+1).type(torch.cuda.FloatTensor)) ## unvoice(0)인데 voice(1)로 mask한 경우
-        
+            
             pred_mask = pred_mask[:,0,:,:]
             pred_mag = pred_mag[:,0,:,:]
             pred_phase = pred_phase[:,0,:,:]
@@ -295,6 +291,19 @@ for epoch in range(n_epoch):
             y_val_mag = y_val_mag[:,0,:,:]
             y_val_phase = y_val_phase[:,0,:,:]
 
+            r_phase = stftTool.inverse(y_val_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
+            r_phase_true = stftTool.inverse(y_val_mask*torch.exp(y_val_mag),y_val_phase,n_frame*128)
+            phase_loss = cosine_distance_criterion(r_phase[:,30:-30],r_phase_true[:,30:-30]) 
+#             phase_loss = L1_criterion(y_val_mask*pred_phase,y_val_mask*y_val_phase)/(torch.sum(y_val_mask) + 1e-5)
+            loss = mask_loss + args.loss_gamma*(mag_loss + args.loss_lambda*phase_loss)
+        
+            zero_mask = torch.zeros_like(pred_mask)
+            pred_mask = torch.round(torch.sigmoid(pred_mask))
+            mask_diff = pred_mask - y_val_mask
+            mask_accuracy = torch.mean(torch.eq(mask_diff,zero_mask).type(torch.cuda.FloatTensor))
+            false_negative = torch.mean(torch.eq(mask_diff,zero_mask-1).type(torch.cuda.FloatTensor)) ## voice(1)인데 unvoice(0)로 mask한 경우
+            false_positive = torch.mean(torch.eq(mask_diff,zero_mask+1).type(torch.cuda.FloatTensor)) ## unvoice(0)인데 voice(1)로 mask한 경우
+    
             pred_signal_recon = stftTool.inverse(pred_mask*torch.exp(pred_mag),pred_phase,n_frame*128)
             y_val_signal_recon = stftTool.inverse(y_val_mask*torch.exp(y_val_mag),y_val_phase,n_frame*128)
             signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_val_signal_recon[:,30:-30])

@@ -60,8 +60,11 @@ def dynamic_range_decompression(x, C=1, torch_mode=False):
         return torch.exp(x) / C
     return np.exp(x) / C
 
+def loudness_normalize(x):
+    return x/(np.mean(x**2)*10+1e-4)
+
 def mag_normalize(mag):
-    return 10*mag/(np.mean(mag**2) + 1e-3)
+    return 10*mag/(np.mean(mag**2) + 1e-4)
 
 def stft_process(stft,mask=False):
     mag = np.abs(stft)
@@ -70,7 +73,6 @@ def stft_process(stft,mask=False):
     if not mask:
         mag = mag_normalize(mag) ## input만 normalize 시켜준다. mask는 output에 대해서만 구해준다.
     mag = dynamic_range_compression(mag)
-#     phase = unwrap(phase)
     mag = mag[np.newaxis,:,:]
     phase = phase[np.newaxis,:,:]
 

@@ -102,6 +102,7 @@ def spectral_loss(coeff = [1,5,5,1]):
 
 def CosineDistanceLoss():
     def f(pred,true):
+        true = true + 1e-3
         return torch.mean(torch.acos(F.cosine_similarity(pred,true,dim=1,eps = 1e-4)),dim=0)
     return f
 
