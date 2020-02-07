@@ -150,7 +150,7 @@ Training
 logging("[*] training ...")
 if verbose:
     best_val = np.inf
-    writer = SummaryWriter('../log/mask-only/%s/'%args.exp_num)   
+    writer = SummaryWriter('../logs/mask-only/%s/'%args.exp_num)   
     
 for epoch in range(n_epoch): 
     st = time.time()
