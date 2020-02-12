@@ -10,43 +10,37 @@ from utils.aug_utils import mix_db
 
 seed_everything(42)
 
-def load_stft_noise(is_test=False):
-    normal_dir = '../eggdata/TrainSTFT/noise/normal/'
-    musical_dir = '../eggdata/TrainSTFT/noise/musical/'
-    normal_noise_files = os.listdir(normal_dir)
-    musical_noise_files = os.listdir(musical_dir)
-    
-    if is_test:
-        normal_noise_files = normal_noise_files[:10]
-        musical_noise_files = musical_noise_files[:10]
-    
-    normal_noise = [np.load(normal_dir+file) for file in normal_noise_files]
-    musical_noise = [np.load(musical_dir+file) for file in musical_noise_files]
-    
-    return normal_noise, musical_noise
-
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self,X,n_sample=1024,stride = 512, config = None,is_train=True,aug = None):
+    def __init__(self,X,n_sample=1024,stride = 512, config = None,is_train=True,aug = None,musical_noise = None,normal_noise = None):
         self.X = X
         self.n_sample = n_sample
         self.stride = stride
         self.is_train = is_train
         self.aug = aug
         self.config = config
-
+        self.musical_noise = musical_noise
+        self.normal_noise = normal_noise
+    
     def __len__(self):
         return (self.X.shape[1]-self.n_sample)//self.stride -1
     def __getitem__(self,idx):
         start_frame = idx*self.stride + np.random.randint(0,self.n_sample-1)
-#         start_frame = idx*self.stride + self.n_sample-1
         X = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
         y = np.array(self.X[1,start_frame : start_frame + self.n_sample].tolist())
         if self.is_train:
-            ## add white noise
+            prob = np.random.uniform(0,1)
             db = np.random.uniform(0,20)
-            noise = np.random.normal(size = X.shape)
+            if prob < 0.5 or self.musical_noise is None:
+                noise = np.random.normal(size = X.shape)
+            elif prob > 0.5:
+                if prob>0.75 or not self.normal_noise is None:
+                    piv = np.random.randint(0,len(self.musical_noise)-self.n_sample-1)
+                    noise = np.array(self.musical_noise[piv:piv+self.n_sample].tolist())
+                else:
+                    piv = np.random.randint(0,len(self.normal_noise)-self.n_sample-1)
+                    noise = np.array(self.normal_noise[piv:piv+self.n_sample].tolist())
             X = mix_db(X,noise,db)
-            
+                
         X = loudness_normalize(X)
         X = librosa.stft(X,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
         y = librosa.stft(y,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
@@ -55,6 +49,119 @@ class Dataset(torch.utils.data.Dataset):
         
         return X,y
 
+class SSLDataset(torch.utils.data.Dataset):
+    def __init__(self,X,n_sample=1024,stride = 512, config = None,is_train=True,aug = None,musical_noise = None,normal_noise = None):
+        self.X = X
+        self.n_sample = n_sample
+        self.stride = stride
+        self.is_train = is_train
+        self.aug = aug
+        self.config = config
+        self.musical_noise = musical_noise
+        self.normal_noise = normal_noise
+    
+    def __len__(self):
+        return (self.X.shape[1]-self.n_sample)//self.stride -1
+    def __getitem__(self,idx):
+        start_frame = idx*self.stride + np.random.randint(0,self.n_sample-1)
+        X1 = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
+        X2 = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
+        y = np.array(self.X[1,start_frame : start_frame + self.n_sample].tolist())
+        if self.is_train:
+            prob = np.random.uniform(0,1)
+            db = np.random.uniform(0,20)
+            if prob < 0.5 or not self.musical_noise is None:
+                noise = np.random.normal(size = X.shape)
+            elif prob > 0.5:
+                if prob>0.75 or not self.normal_noise is None:
+                    piv = np.random.randint(0,len(self.musical_noise)-self.n_sample-1)
+                    noise = np.array(self.musical_noise[piv:piv+self.n_sample].tolist())
+                else:
+                    piv = np.random.randint(0,len(self.normal_noise)-self.n_sample-1)
+                    noise = np.array(self.normal_noise[piv:piv+self.n_sample].tolist())
+            X1 = mix_db(X1,noise,db)
+
+            prob = np.random.uniform(0,1)
+            db = np.random.uniform(0,20)
+            if prob < 0.5 or not self.musical_noise is None:
+                noise = np.random.normal(size = X.shape)
+            elif prob > 0.5:
+                if prob>0.75 or not self.normal_noise is None:
+                    piv = np.random.randint(0,len(self.musical_noise)-self.n_sample-1)
+                    noise = np.array(self.musical_noise[piv:piv+self.n_sample].tolist())
+                else:
+                    piv = np.random.randint(0,len(self.normal_noise)-self.n_sample-1)
+                    noise = np.array(self.normal_noise[piv:piv+self.n_sample].tolist())
+            X2 = mix_db(X2,noise,db)            
+            
+        X1 = loudness_normalize(X1)
+        X2 = loudness_normalize(X2)
+        X1 = librosa.stft(X1,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        X2 = librosa.stft(X2,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        y = librosa.stft(y,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        
+        X1 = stft_process(X1).astype(np.float32)
+        X2 = stft_process(X2).astype(np.float32)
+        y = stft_process(y,mask=True).astype(np.float32)
+        
+        return (X1,X2),y,1
+
+class UnlabelDataset(torch.utils.data.Dataset):
+    def __init__(self,X,n_sample=1024,stride = 512, config = None,is_train=True,aug = None,musical_noise = None,normal_noise = None):
+        self.X = X
+        self.n_sample = n_sample
+        self.stride = stride
+        self.is_train = is_train
+        self.aug = aug
+        self.config = config
+        self.musical_noise = musical_noise
+        self.normal_noise = normal_noise
+    
+    def __len__(self):
+        return (self.X.shape[1]-self.n_sample)//self.stride -1
+    def __getitem__(self,idx):
+        start_frame = idx*self.stride + np.random.randint(0,self.n_sample-1)
+        X1 = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
+        X2 = np.array(self.X[0,start_frame : start_frame + self.n_sample].tolist())
+        if self.is_train:
+            prob = np.random.uniform(0,1)
+            db = np.random.uniform(0,20)
+            if prob < 0.5 or not self.musical_noise is None:
+                noise = np.random.normal(size = X.shape)
+            elif prob > 0.5:
+                if prob>0.75 or not self.normal_noise is None:
+                    piv = np.random.randint(0,len(self.musical_noise)-self.n_sample-1)
+                    noise = np.array(self.musical_noise[piv:piv+self.n_sample].tolist())
+                else:
+                    piv = np.random.randint(0,len(self.normal_noise)-self.n_sample-1)
+                    noise = np.array(self.normal_noise[piv:piv+self.n_sample].tolist())
+            X1 = mix_db(X1,noise,db)
+
+            prob = np.random.uniform(0,1)
+            db = np.random.uniform(0,20)
+            if prob < 0.5 or not self.musical_noise is None:
+                noise = np.random.normal(size = X.shape)
+            elif prob > 0.5:
+                if prob>0.75 or not self.normal_noise is None:
+                    piv = np.random.randint(0,len(self.musical_noise)-self.n_sample-1)
+                    noise = np.array(self.musical_noise[piv:piv+self.n_sample].tolist())
+                else:
+                    piv = np.random.randint(0,len(self.normal_noise)-self.n_sample-1)
+                    noise = np.array(self.normal_noise[piv:piv+self.n_sample].tolist())
+            X2 = mix_db(X2,noise,db)        
+            
+        X1 = loudness_normalize(X1)
+        X2 = loudness_normalize(X2)
+        X1 = librosa.stft(X1,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        X2 = librosa.stft(X2,n_fft = self.config["window_length"], hop_length = self.config["hop_length"], window = self.config["window"])
+        
+        X1 = stft_process(X1).astype(np.float32)
+        X2 = stft_process(X2).astype(np.float32)
+        
+        y = np.zeros((3,*X1.shape[1:])).astype(X1.dtype)
+        
+        return (X1,X2),y,0
+    
 # class Dataset(torch.utils.data.Dataset):
 #     def __init__(self,X,n_frame,stride,is_train = True,normal_noise = None,musical_noise=None,aug=None,pseudo_mode=False):
 #         self.data = np.load(X,mmap_mode='r') if isinstance(X,str) else X

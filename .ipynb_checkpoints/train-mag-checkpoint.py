@@ -59,7 +59,7 @@ n_sample = args.n_sample
 
 ##training parameters
 n_epoch = args.epoch
-batch_size = args.batch_size//4 if ddp else args.batch_size
+batch_size = args.batch_size//6 if ddp else args.batch_size
 
 ##optimizer parameters##
 learning_rate = args.lr
@@ -95,35 +95,39 @@ logging("[*] load data ...")
 st = time.time()
 train = np.load('../eggdata/TrainData/train_processing_0205.npy',mmap_mode='r')
 val = np.load('../eggdata/TrainData/valid_processing_0205.npy',mmap_mode='r')
+# musical_noise = None
+# normal_noise = None
+musical_noise = np.load('../eggdata/TrainData/musical_0212.npy',mmap_mode='r')
+normal_noise = np.load('../eggdata/TrainData/normal_0212.npy',mmap_mode='r')
 
 logging(train.shape)
 logging(val.shape)
 
-train_dataset = Dataset(train,n_sample, train_stride,stft_config, is_train = True)
+train_dataset = Dataset(train,n_sample, train_stride,stft_config, is_train = True,musical_noise = musical_noise, normal_noise = normal_noise)
 valid_dataset = Dataset(val,n_sample, valid_stride,stft_config, is_train = False)
-train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
-valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
+train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=6, rank=args.local_rank)
+valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=6, rank=args.local_rank)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers=mp.cpu_count()//6 if ddp else mp.cpu_count(),
                                sampler = train_sampler if ddp else None,
                                shuffle = True if not ddp else False,
                                pin_memory=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers=mp.cpu_count()//6 if ddp else mp.cpu_count(),
                                sampler = valid_sampler if ddp else None,
                                pin_memory=True)
 
 logging("Load duration : {}".format(time.time()-st))
 logging("[!] load data end")
-mag_criterion = nn.L1Loss().cuda()
+mag_criterion = nn.L1Loss(reduction='sum')
 cosine_distance_criterion = CosineDistanceLoss()
 """
 model definition
 """
 
-model = get_efficientunet_b0(out_channels=1, concat_input=True, pretrained=False,mode = 'mag', bn = BatchNorm2dSync)
+model = get_efficientunet_b4(out_channels=1, concat_input=True, pretrained=False,mode = 'mag', bn = BatchNorm2dSync)
 model.cuda()
 
 optimizer = torch.optim.SGD(model.parameters(),lr=learning_rate, momentum=momentum, weight_decay=weight_decay, nesterov=True)
@@ -170,7 +174,7 @@ for epoch in range(n_epoch):
         
         optimizer.zero_grad()
         
-        loss = mag_criterion(y_train_mask*pred,y_train_mask*y_train_mag)
+        loss = mag_criterion(y_train_mask*pred,y_train_mask*y_train_mag)/(torch.sum(y_train_mask) + 1e-5)
         if mixed:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -199,16 +203,12 @@ for epoch in range(n_epoch):
             y_val_phase = y_val[:,1,:,:]
             y_val_mask = y_val[:,2,:,:]
 
-            loss = mag_criterion(y_val_mask*pred,y_val_mask*y_val_mag)
-
+            loss = mag_criterion(y_val_mask*pred,y_val_mask*y_val_mag)/(torch.sum(y_val_mask) + 1e-5)
             pred_signal_recon = stftTool.inverse(y_val_mask*torch.exp(pred),y_val_phase,n_sample)
             y_val_signal_recon = stftTool.inverse(y_val_mask*torch.exp(y_val_mag),y_val_phase,n_sample)
             signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_val_signal_recon[:,30:-30])
 
             val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
-            val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
-            val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
-            val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
             val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
         
     scheduler.step(val_loss)
@@ -230,3 +230,5 @@ for epoch in range(n_epoch):
 if verbose:
     writer.close()
 logging("[!] training end")
+if verbose:
+    print(best_val)
