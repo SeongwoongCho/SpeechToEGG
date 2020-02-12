@@ -59,7 +59,7 @@ n_sample = args.n_sample
 
 ##training parameters
 n_epoch = args.epoch
-batch_size = args.batch_size//4 if ddp else args.batch_size
+batch_size = args.batch_size//6 if ddp else args.batch_size
 
 ##optimizer parameters##
 learning_rate = args.lr
@@ -101,17 +101,17 @@ logging(val.shape)
 
 train_dataset = Dataset(train,n_sample, train_stride,stft_config, is_train = True)
 valid_dataset = Dataset(val,n_sample, valid_stride,stft_config, is_train = False)
-train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=4, rank=args.local_rank)
-valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=4, rank=args.local_rank)
+train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=6, rank=args.local_rank)
+valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, num_replicas=6, rank=args.local_rank)
 train_loader = data.DataLoader(dataset=train_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers=mp.cpu_count()//6 if ddp else mp.cpu_count(),
                                sampler = train_sampler if ddp else None,
                                shuffle = True if not ddp else False,
                                pin_memory=True)
 valid_loader = data.DataLoader(dataset=valid_dataset,
                                batch_size=batch_size,
-                               num_workers=mp.cpu_count()//4 if ddp else mp.cpu_count(),
+                               num_workers=mp.cpu_count()//6 if ddp else mp.cpu_count(),
                                sampler = valid_sampler if ddp else None,
                                pin_memory=True)
 
@@ -206,9 +206,6 @@ for epoch in range(n_epoch):
             signal_distance = cosine_distance_criterion(pred_signal_recon[:,30:-30],y_val_signal_recon[:,30:-30])
 
             val_loss += dynamic_loss(loss,ddp)/len(valid_loader)
-            val_mask_accuracy += dynamic_loss(mask_accuracy,ddp)/len(valid_loader)
-            val_false_negative += dynamic_loss(false_negative,ddp)/len(valid_loader)
-            val_false_positive += dynamic_loss(false_positive,ddp)/len(valid_loader)
             val_signal_distance += dynamic_loss(signal_distance,ddp)/len(valid_loader)
         
     scheduler.step(val_loss)
